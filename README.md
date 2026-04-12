@@ -5,6 +5,19 @@ com inferência local (MediaPipe LLM) e cloud (Firebase AI Logic / Gemini).
 
 ---
 
+## Arquivos não incluídos no repositório
+
+Dois arquivos **não estão no Git** e precisam ser obtidos manualmente:
+
+| Arquivo | Motivo | O que fazer |
+| ------------------------------------------- | ------------------------------------------- | -------------------------------------------------- |
+| `app/google-services.json` | Contém chaves privadas do Firebase | Ver [seção 2](#2-firebase-ai-logic-inferência-cloud--gemini) |
+| `app/src/main/assets/models/*.task` | Modelo de 529 MB (acima do limite do GitHub) | Ver [seção 3](#3-modelo-local-inferência-offline--mediapipe-llm) |
+
+> **Sem esses arquivos o app ainda compila e roda:** sem o `.json` a inferência cloud fica desativada; sem o `.task` a inferência local fica desativada. O app continua funcional com a fonte disponível.
+
+---
+
 ## Pré-requisitos de ambiente
 
 
@@ -111,14 +124,29 @@ funcionando com cloud apenas (quando online).
 
 #### 3.1 Baixar o modelo
 
+> **Por que o modelo não está no repositório?**
+> O arquivo `gemma3-1b-it-int4.task` tem **529 MB**, acima do limite de 100 MB por arquivo do GitHub.
+> Ele é ignorado via `.gitignore` (`app/src/main/assets/models/`) e deve ser baixado manualmente.
+
 Baixe um modelo compatível com MediaPipe LLM Inference (formato `.task`):
 
+| Modelo             | Tamanho  | RAM requerida | Link de download direto |
+| ------------------ | -------- | ------------- | ----------------------- |
+| **Gemma 3 1B IT INT4** ← RECOMENDADO | ~529 MB | ~2 GB | [litert-community/Gemma3-1B-IT no HuggingFace](https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4.task) |
+| Gemma 3n E2B       | ~1.2 GB  | ~3 GB         | [litert-community no HuggingFace](https://huggingface.co/litert-community) |
+| Gemma 3n E4B       | ~2.5 GB  | ~6 GB         | [litert-community no HuggingFace](https://huggingface.co/litert-community) |
 
-| Modelo                | Tamanho | RAM requerida | Link                                                                                       |
-| --------------------- | ------- | ------------- | ------------------------------------------------------------------------------------------ |
-| Gemma 3 1B IT INT4    | ~900 MB | ~2 GB         | [HuggingFace](https://huggingface.co/litert-community/Gemma3-1B-IT) ← **RECOMENDADO**     |
-| Gemma 3n E2B          | ~1.2 GB | ~3 GB         | [HuggingFace](https://huggingface.co/litert-community)                                     |
-| Gemma 3n E4B          | ~2.5 GB | ~6 GB         | [HuggingFace](https://huggingface.co/litert-community)                                     |
+> Para baixar via linha de comando (requer `wget` ou `curl`):
+> ```bash
+> # Linux / macOS
+> wget -P app/src/main/assets/models/ \
+>   https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4.task
+>
+> # Windows (PowerShell)
+> Invoke-WebRequest `
+>   -Uri "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4.task" `
+>   -OutFile "app\src\main\assets\models\gemma3-1b-it-int4.task"
+> ```
 
 
 #### 3.2 Posicionar o arquivo do modelo
