@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Voice Assistant</string>
+    <string name="permission_mic_rationale">O microfone é necessário para capturar sua voz. O aplicativo não funciona sem ele no modo de voz.</string>
+    <string name="permission_mic_denied">Sem permissão de microfone, apenas o modo de texto está disponível.</string>
+    <string name="label_source_local">LOCAL</string>
+    <string name="label_source_cloud">CLOUD</string>
+    <string name="label_source_fallback">FALLBACK</string>
+    <string name="hint_message_input">Digite ou fale uma pergunta…</string>
+    <string name="cd_mic_button">Pressionar para falar</string>
+    <string name="cd_send_button">Enviar mensagem</string>
+    <string name="cd_stop_listening">Parar de ouvir</string>
+
+    <!-- Modos pedagógicos -->
+    <string name="tutor_mode_explain">Explicar</string>
+    <string name="tutor_mode_hint">Dica</string>
+    <string name="tutor_mode_summary">Resumir</string>
+    <string name="tutor_mode_review">Revisar</string>
+</resources>

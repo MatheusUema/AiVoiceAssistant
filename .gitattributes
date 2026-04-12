@@ -1,0 +1,16 @@
+# Normaliza fins de linha para LF no repositório
+* text=auto eol=lf
+
+# Binários — sem conversão
+*.png binary
+*.webp binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.jar binary
+*.zip binary
+*.apk binary
+*.aab binary
+*.task binary
+gradle/wrapper/gradle-wrapper.jar binary

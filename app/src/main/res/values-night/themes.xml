@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.VoiceAssistant" parent="Theme.Material3.DayNight.NoActionBar" />
+
+    <!-- Tema da splash screen — delega ao tema principal após exibição -->
+    <style name="Theme.VoiceAssistant.SplashScreen" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <item name="postSplashScreenTheme">@style/Theme.VoiceAssistant</item>
+    </style>
+</resources>
