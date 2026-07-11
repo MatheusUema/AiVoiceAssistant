@@ -26,4 +26,10 @@ class SettingsRepositoryImpl @Inject constructor(
 
     override suspend fun setTtsSpeechRate(rate: Float) =
         dataStore.setTtsSpeechRate(rate)
+
+    override suspend fun setServerTierEnabled(enabled: Boolean) =
+        dataStore.setServerTierEnabled(enabled)
+
+    override suspend fun setServerBaseUrl(url: String) =
+        dataStore.setServerBaseUrl(url)
 }

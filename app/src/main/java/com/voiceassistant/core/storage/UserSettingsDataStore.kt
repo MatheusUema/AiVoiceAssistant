@@ -30,6 +30,8 @@ open class UserSettingsDataStore @Inject constructor(
         val TTS_ENABLED = booleanPreferencesKey("tts_enabled")
         val PREFERRED_LANGUAGE = stringPreferencesKey("preferred_language")
         val TTS_SPEECH_RATE = floatPreferencesKey("tts_speech_rate")
+        val SERVER_TIER_ENABLED = booleanPreferencesKey("server_tier_enabled")
+        val SERVER_BASE_URL = stringPreferencesKey("server_base_url")
     }
 
     open val settings: Flow<UserSettings>
@@ -38,7 +40,9 @@ open class UserSettingsDataStore @Inject constructor(
                 privacyModeEnabled = prefs[Keys.PRIVACY_MODE] ?: false,
                 ttsEnabled = prefs[Keys.TTS_ENABLED] ?: true,
                 preferredLanguage = prefs[Keys.PREFERRED_LANGUAGE] ?: "pt-BR",
-                ttsSpeechRate = prefs[Keys.TTS_SPEECH_RATE] ?: 1.0f
+                ttsSpeechRate = prefs[Keys.TTS_SPEECH_RATE] ?: 1.0f,
+                serverTierEnabled = prefs[Keys.SERVER_TIER_ENABLED] ?: false,
+                serverBaseUrl = prefs[Keys.SERVER_BASE_URL] ?: ""
             )
         }
 
@@ -56,5 +60,13 @@ open class UserSettingsDataStore @Inject constructor(
 
     suspend fun setTtsSpeechRate(rate: Float) {
         context.dataStore.edit { it[Keys.TTS_SPEECH_RATE] = rate.coerceIn(0.5f, 2.0f) }
+    }
+
+    suspend fun setServerTierEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.SERVER_TIER_ENABLED] = enabled }
+    }
+
+    suspend fun setServerBaseUrl(url: String) {
+        context.dataStore.edit { it[Keys.SERVER_BASE_URL] = url.trim() }
     }
 }
