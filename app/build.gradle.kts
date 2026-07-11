@@ -109,9 +109,10 @@ dependencies {
     // --- Serialization ---
     implementation(libs.kotlinx.serialization.json)
 
-    // --- Network (para Firebase AI Logic) ---
+    // --- Network (Firebase AI Logic + tier servidor llama.cpp) ---
     implementation(libs.retrofit)
     implementation(libs.retrofit.serialization)
+    implementation(libs.okhttp)
     implementation(libs.okhttp.logging)
 
     // --- Firebase BOM + AI Logic (Gemini) ---
