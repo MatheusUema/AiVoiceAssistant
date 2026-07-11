@@ -31,6 +31,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.HourglassTop
@@ -167,6 +168,9 @@ fun InferenceSourceBadge(
         InferenceSource.LOCAL -> BadgeStyle("LOCAL", Icons.Default.Home,
             MaterialTheme.colorScheme.tertiaryContainer,
             MaterialTheme.colorScheme.onTertiaryContainer)
+        InferenceSource.SERVER -> BadgeStyle("SERVER", Icons.Default.Dns,
+            MaterialTheme.colorScheme.secondaryContainer,
+            MaterialTheme.colorScheme.onSecondaryContainer)
         InferenceSource.CLOUD -> BadgeStyle("CLOUD", Icons.Default.Cloud,
             MaterialTheme.colorScheme.primaryContainer,
             MaterialTheme.colorScheme.onPrimaryContainer)

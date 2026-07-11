@@ -8,6 +8,12 @@ enum class InferenceSource {
     /** Resposta gerada pelo modelo local via MediaPipe LLM Inference */
     LOCAL,
 
+    /**
+     * Resposta gerada pelo tier servidor (llama.cpp `llama-server` na rede local).
+     * Único tier que expõe logprobs → `InferenceResult.confidence` é significativo.
+     */
+    SERVER,
+
     /** Resposta gerada pela API do Firebase AI Logic (Gemini) */
     CLOUD,
 

@@ -12,4 +12,6 @@ interface SettingsRepository {
     suspend fun setTtsEnabled(enabled: Boolean)
     suspend fun setPreferredLanguage(language: String)
     suspend fun setTtsSpeechRate(rate: Float)
+    suspend fun setServerTierEnabled(enabled: Boolean)
+    suspend fun setServerBaseUrl(url: String)
 }
