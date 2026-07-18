@@ -19,11 +19,17 @@ Uso:
   python scripts/server_smoke_test.py --url http://... --raw
   python scripts/server_smoke_test.py --url http://... --calibrate prompts.txt
 
-Apenas biblioteca padrão (urllib, json). Compatível com Python 3.7+.
+Em CPU lenta (ex.: ~3,5 tokens/s), enunciados longos do ENEM demoram: use um timeout
+folgado e reduza os tokens gerados, ex.:
+  python scripts/server_smoke_test.py --url http://... --calibrate prompts.txt \
+      --timeout 600 --n-predict 24
+
+Apenas biblioteca padrão (urllib, json, socket). Compatível com Python 3.7+.
 """
 import argparse
 import json
 import math
+import socket
 import statistics
 import sys
 import urllib.error
@@ -99,6 +105,25 @@ def mean_confidence(top1_probs):
     return sum(top1_probs) / len(top1_probs)
 
 
+def describe_error(e):
+    """Mensagem curta e acionável distinguindo timeout de conexão recusada, etc."""
+    # HTTPError é subclasse de URLError — checar antes.
+    if isinstance(e, urllib.error.HTTPError):
+        return f"HTTP {e.code} {e.reason}"
+    if isinstance(e, urllib.error.URLError):
+        reason = e.reason
+        if isinstance(reason, (socket.timeout, TimeoutError)):
+            return "TIMEOUT (aumente --timeout ou reduza --n-predict)"
+        if isinstance(reason, ConnectionRefusedError) or "refused" in str(reason).lower():
+            return "CONEXAO RECUSADA (servidor no ar? host/porta corretos? firewall?)"
+        return f"REDE: {reason}"
+    if isinstance(e, (socket.timeout, TimeoutError)):
+        return "TIMEOUT (aumente --timeout ou reduza --n-predict)"
+    if isinstance(e, ConnectionRefusedError):
+        return "CONEXAO RECUSADA (servidor no ar? host/porta corretos? firewall?)"
+    return f"{type(e).__name__}: {e}"
+
+
 def run_health(base_url, timeout):
     url = base_url.rstrip("/") + "/health"
     try:
@@ -108,7 +133,7 @@ def run_health(base_url, timeout):
         print(f"[health]     GET /health -> status={status!r} {'OK' if ok else 'INESPERADO'}")
         return ok
     except Exception as e:
-        print(f"[health]     GET /health FALHOU: {e}")
+        print(f"[health]     GET /health FALHOU: {describe_error(e)}")
         return False
 
 
@@ -125,16 +150,21 @@ def run_once(base_url, prompt, n_predict, n_probs, timeout, raw=False):
     return content, tokens, conf, variant, len(top1)
 
 
+def health_timeout(args):
+    """/health deve responder rápido — não usar o timeout (folgado) do /completion."""
+    return min(args.timeout, 15.0)
+
+
 def cmd_default(args):
     base = args.url
     print(f"Servidor: {base}")
-    health_ok = run_health(base, args.timeout)
+    health_ok = run_health(base, health_timeout(args))
     try:
         content, tokens, conf, variant, n = run_once(
             base, args.prompt, args.n_predict, args.n_probs, args.timeout, raw=args.raw
         )
-    except urllib.error.URLError as e:
-        print(f"[completion] FALHOU: {e}")
+    except Exception as e:
+        print(f"[completion] FALHOU: {describe_error(e)}")
         return 1
     print(f"[completion] POST /completion (n_probs={args.n_probs}) -> {tokens} tokens")
     print(f"[schema]     variante detectada: {variant}  ({n} tokens com prob)")
@@ -181,7 +211,8 @@ def percentile(values, pct):
 def cmd_calibrate(args):
     base = args.url
     print(f"Servidor: {base}")
-    if not run_health(base, args.timeout):
+    print(f"(timeout={args.timeout:.0f}s por prompt, n_predict={args.n_predict})")
+    if not run_health(base, health_timeout(args)):
         print("Abortando calibracao: servidor nao saudavel.")
         return 2
     items = parse_calibration_file(args.calibrate)
@@ -198,7 +229,7 @@ def cmd_calibrate(args):
                 base, prompt, args.n_predict, args.n_probs, args.timeout
             )
         except Exception as e:
-            print(f"{group:<6} ERRO      {prompt[:40]} ({e})")
+            print(f"{group:<6} ERRO      {prompt[:40]} ({describe_error(e)})")
             continue
         if conf < 0:
             print(f"{group:<6} -1        {prompt[:40]}  [{variant}]")
@@ -235,9 +266,13 @@ def main():
     ap = argparse.ArgumentParser(description="Smoke test do llama-server (tier servidor).")
     ap.add_argument("--url", required=True, help="ex.: http://192.168.1.100:8080")
     ap.add_argument("--prompt", default=DEFAULT_PROMPT)
-    ap.add_argument("--n-predict", type=int, default=64)
+    ap.add_argument("--n-predict", type=int, default=64,
+                    help="tokens gerados por prompt (menos = mais rapido; a confianca "
+                         "usa os tokens gerados). Default: 64")
     ap.add_argument("--n-probs", type=int, default=5)
-    ap.add_argument("--timeout", type=float, default=30.0)
+    ap.add_argument("--timeout", type=float, default=300.0,
+                    help="timeout (s) das requisicoes ao /completion. Suba em CPU lenta "
+                         "com enunciados longos. Default: 300")
     ap.add_argument("--raw", action="store_true", help="imprime o JSON cru da completion")
     ap.add_argument("--calibrate", metavar="ARQUIVO",
                     help="arquivo de prompts (easy:/hard:) p/ calibrar thresholds")
