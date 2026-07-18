@@ -14,6 +14,7 @@ import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.exp
 
 /**
  * Tier servidor: cliente HTTP para o `llama-server` (llama.cpp) na rede local.
@@ -156,23 +157,33 @@ open class ServerInferenceService @Inject constructor(
 
     /**
      * Confiança = média da probabilidade do **token efetivamente escolhido** em cada
-     * posição gerada (conforme doc 01). O token escolhido é `TokenProb.content`; sua
-     * probabilidade é a entrada de `probs` cujo `tokStr` bate com ele. Com sampling
-     * (temperatura > 0) o token escolhido pode não ser o mais provável (`probs[0]`),
-     * por isso o casamento por `content` — com fallback para o primeiro candidato.
-     * Retorna -1 quando não há logprobs disponíveis.
+     * posição gerada (conforme doc 01). Suporta os dois formatos de
+     * `completion_probabilities` (ver [TokenProb]):
+     *  - **novo:** a entrada de topo já é o token escolhido; prob = `exp(logprob)`;
+     *  - **antigo:** prob do candidato de `probs` cujo `tokStr` bate com `content`
+     *    (com fallback para o primeiro candidato — importante com sampling, em que o
+     *    token escolhido pode não ser o mais provável).
+     * Degradação graciosa: retorna -1 quando não há dados de logprob utilizáveis.
      */
     internal fun calculateConfidence(probs: List<TokenProb>?): Float {
         if (probs.isNullOrEmpty()) return CONFIDENCE_UNAVAILABLE
 
-        val tokenConfidences = probs.mapNotNull { tp ->
-            val chosen = tp.probs.firstOrNull { it.tokStr == tp.content }
-                ?: tp.probs.firstOrNull()
-            chosen?.prob
-        }
+        val tokenConfidences = probs.mapNotNull { chosenTokenProb(it) }
 
         if (tokenConfidences.isEmpty()) return CONFIDENCE_UNAVAILABLE
         return tokenConfidences.average().toFloat()
+    }
+
+    /** Probabilidade [0,1] do token escolhido nesta posição, ou null se indisponível. */
+    private fun chosenTokenProb(tp: TokenProb): Float? {
+        // Schema novo: a própria entrada é o token escolhido, com seu logprob.
+        tp.logprob?.let { return exp(it.toDouble()).toFloat() }
+
+        // Schema antigo: candidato cujo tok_str == content; senão o primeiro candidato.
+        val candidates = tp.probs ?: return null
+        val chosen = candidates.firstOrNull { it.tokStr != null && it.tokStr == tp.content }
+            ?: candidates.firstOrNull()
+        return chosen?.prob
     }
 
     internal fun normalizeBaseUrl(url: String): String =

@@ -61,7 +61,46 @@ class ServerInferenceServiceTest {
 
     @Test
     fun `tokens without candidates yield unavailable`() {
-        val probs = listOf(TokenProb("A", emptyList()))
+        val probs = listOf(TokenProb(content = "A", probs = emptyList()))
+        assertEquals(
+            ServerInferenceService.CONFIDENCE_UNAVAILABLE,
+            service.calculateConfidence(probs)
+        )
+    }
+
+    // ── calculateConfidence — schema NOVO (token/logprob/top_logprobs) ────
+
+    @Test
+    fun `new schema uses exp of chosen-token logprob (top-level entry)`() {
+        // A entrada de topo já é o token escolhido; usa o logprob DELA (não do top_logprobs).
+        val probs = listOf(
+            TokenProb(
+                token = "\n\n",
+                logprob = -0.0397f,
+                topLogprobs = listOf(
+                    ProbEntry(token = "\n\n", logprob = -0.0397f),
+                    ProbEntry(token = "\n", logprob = -3.38f)
+                )
+            )
+        )
+        // exp(-0.0397) ≈ 0.9611
+        assertEquals(0.9611f, service.calculateConfidence(probs), 1e-3f)
+    }
+
+    @Test
+    fun `new schema averages exp of logprobs across tokens`() {
+        // Caso real: logprobs de 9 tokens -> confiança ~0.94.
+        val logprobs = listOf(
+            -0.0397f, -0.356f, -0.003f, -0.0148f, -0.0058f,
+            -0.000136f, -0.00288f, -0.217f, -0.00436f
+        )
+        val probs = logprobs.map { TokenProb(token = "t", logprob = it) }
+        assertEquals(0.94f, service.calculateConfidence(probs), 0.01f)
+    }
+
+    @Test
+    fun `new schema entry without logprob degrades to unavailable`() {
+        val probs = listOf(TokenProb(token = "t")) // sem logprob e sem probs
         assertEquals(
             ServerInferenceService.CONFIDENCE_UNAVAILABLE,
             service.calculateConfidence(probs)
