@@ -17,7 +17,14 @@ import retrofit2.http.POST
  * DTOs usam kotlinx.serialization (converter já configurado no projeto). Campos JSON
  * em snake_case são mapeados via [SerialName] para propriedades camelCase idiomáticas.
  * O [kotlinx.serialization.json.Json] do service usa `ignoreUnknownKeys = true`, então
- * campos extras do servidor (timings, model, etc.) não quebram a desserialização.
+ * campos extras do servidor (timings, model, id, bytes, etc.) não quebram a
+ * desserialização.
+ *
+ * O formato de `completion_probabilities` mudou entre versões do `llama-server`. Os DTOs
+ * suportam **ambos** (todos os campos nullable, distinguidos por presença):
+ *  - **Antigo:** `[{ "content": "A", "probs": [{ "tok_str": "A", "prob": 0.92 }] }]`
+ *  - **Novo:**   `[{ "token": "A", "logprob": -0.08, "top_logprobs": [...] }]` — a
+ *    própria entrada é o token escolhido; probabilidade = `exp(logprob)`.
  */
 interface LlamaServerApi {
 
@@ -46,16 +53,32 @@ data class CompletionResponse(
     @SerialName("completion_probabilities") val completionProbabilities: List<TokenProb>? = null
 )
 
+/**
+ * Uma posição gerada. Campos do schema **antigo** ([content]/[probs]) e do **novo**
+ * ([token]/[logprob]/[topLogprobs]) coexistem como nullable; o parsing usa o que
+ * estiver presente. No schema novo a própria entrada é o token escolhido.
+ */
 @Serializable
 data class TokenProb(
-    val content: String = "",
-    val probs: List<ProbEntry> = emptyList()
+    // Schema antigo: token escolhido em `content`, candidatos em `probs` (com `prob`).
+    val content: String? = null,
+    val probs: List<ProbEntry>? = null,
+    // Schema novo: entrada = token escolhido, com `logprob` (log natural). Candidatos
+    // em `top_logprobs`. Probabilidade do token = exp(logprob).
+    val token: String? = null,
+    val logprob: Float? = null,
+    @SerialName("top_logprobs") val topLogprobs: List<ProbEntry>? = null
 )
 
+/**
+ * Um candidato de token. Antigo: [tokStr]/[prob]. Novo: [token]/[logprob].
+ */
 @Serializable
 data class ProbEntry(
-    @SerialName("tok_str") val tokStr: String = "",
-    val prob: Float = 0f
+    @SerialName("tok_str") val tokStr: String? = null,
+    val prob: Float? = null,
+    val token: String? = null,
+    val logprob: Float? = null
 )
 
 @Serializable
