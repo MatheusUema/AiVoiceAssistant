@@ -40,14 +40,14 @@ data class LocalModelVariant(
  */
 data class LocalModelConfig(
     /** Modelo oficial do estudo — o mesmo nos 3 aparelhos. */
-    val primary: LocalModelVariant = GEMMA_2B_Q4_K_M,
+    val primary: LocalModelVariant = GEMMA_4_E2B_Q4_K_M,
 
     /**
      * Modelo menor usado se o [primary] não carregar. Null desliga o fallback.
      * O uso do fallback é REGISTRADO — é resultado de pesquisa (limite do aparelho),
      * não uma degradação silenciosa.
      */
-    val fallback: LocalModelVariant? = GEMMA_1B_Q4_K_M,
+    val fallback: LocalModelVariant? = GEMMA_3_1B_Q4_K_M,
 
     /**
      * Se a RAM total do aparelho for menor que isto (MB), pula direto para o [fallback]
@@ -109,21 +109,26 @@ data class LocalModelConfig(
 
     companion object {
         /**
-         * Modelo oficial do estudo: Gemma 2B instruct, quantização Q4_K_M (~1,6 GB).
-         * Arquivo esperado: `app/src/main/assets/models/gemma-2-2b-it-Q4_K_M.gguf`.
+         * Modelo oficial do estudo: **Gemma 4 E2B instruct, Q4_K_M (3,43 GB)**.
+         * `lmstudio-community/gemma-4-E2B-it-GGUF` → `gemma-4-E2B-it-Q4_K_M.gguf`.
+         * 5B parâmetros totais / 2B efetivos. O mesmo modelo nos 3 aparelhos.
          *
          * `minRamMb` folgado de propósito: o Device 2 (4 GB, ~3,6 GB reportados) DEVE
-         * chegar a tentar o carregamento para que a falha vire dado.
+         * chegar a tentar o carregamento para que a falha vire dado — 3,43 GB de pesos
+         * mais o KV-cache quase certamente não cabem lá, e é isso que queremos medir.
          */
-        val GEMMA_2B_Q4_K_M = LocalModelVariant(
-            assetPath = "models/gemma-2-2b-it-Q4_K_M.gguf",
-            sizeMb = 1700,
+        val GEMMA_4_E2B_Q4_K_M = LocalModelVariant(
+            assetPath = "models/gemma-4-E2B-it-Q4_K_M.gguf",
+            sizeMb = 3430,
             minRamMb = 3000,
-            label = "gemma-2-2b-it-q4_k_m"
+            label = "gemma-4-e2b-it-q4_k_m"
         )
 
-        /** Fallback para aparelhos onde o 2B não carrega (Device 2). ~0,8 GB. */
-        val GEMMA_1B_Q4_K_M = LocalModelVariant(
+        /**
+         * Fallback para aparelhos onde o E2B não carrega (Device 2). ~0,8 GB.
+         * Vem da família Gemma 3 porque o E2B é o **menor** Gemma 4 que existe.
+         */
+        val GEMMA_3_1B_Q4_K_M = LocalModelVariant(
             assetPath = "models/gemma-3-1b-it-Q4_K_M.gguf",
             sizeMb = 810,
             minRamMb = 1800,
@@ -138,6 +143,6 @@ data class LocalModelConfig(
             label = "qwen2.5-0.5b-instruct-q4_k_m"
         )
 
-        const val DEFAULT_MODEL_ASSET_PATH: String = "models/gemma-2-2b-it-Q4_K_M.gguf"
+        const val DEFAULT_MODEL_ASSET_PATH: String = "models/gemma-4-E2B-it-Q4_K_M.gguf"
     }
 }

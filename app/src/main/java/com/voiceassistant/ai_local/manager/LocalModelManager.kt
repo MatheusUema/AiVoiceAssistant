@@ -229,12 +229,16 @@ open class LocalModelManager @Inject constructor(
     }
 
     /**
-     * Garante que o modelo está disponível em filesDir.
+     * Resolve o arquivo do modelo, na ordem:
+     *  1. `filesDir/<nome>` → usa direto
+     *  2. `getExternalFilesDir("models")/<nome>` → usa **no lugar**, sem copiar
+     *  3. `assets/<caminho>` → copia para filesDir
+     *  4. nenhum → null
      *
-     * Ordem de busca:
-     *  1. Já existe em filesDir → retorna diretamente
-     *  2. Existe em assets → copia para filesDir
-     *  3. Nenhum dos dois → retorna null
+     * O passo 2 é o caminho normal do estudo: o E2B tem 3,43 GB, então empacotar no APK
+     * (e ainda duplicar ao copiar para filesDir) desperdiçaria ~7 GB num aparelho de 64 GB.
+     * O `adb push` para o diretório externo do app não exige permissão nenhuma e o
+     * llama.cpp faz mmap direto de lá. Ver `scripts/push-model.ps1`.
      */
     private fun ensureModelFile(variant: LocalModelVariant): File? {
         val targetFile = deviceCapabilityChecker.getModelFile(variant)
@@ -244,8 +248,18 @@ open class LocalModelManager @Inject constructor(
             return targetFile
         }
 
+        val sideloaded = File(context.getExternalFilesDir(EXTERNAL_MODELS_DIR), variant.fileName)
+        if (sideloaded.exists() && sideloaded.length() > 0) {
+            Log.i(TAG, "Usando modelo enviado por adb: ${sideloaded.absolutePath}")
+            return sideloaded
+        }
+
         if (!deviceCapabilityChecker.isModelInAssets(variant)) {
-            Log.w(TAG, "Modelo não encontrado em assets/${variant.assetPath}")
+            Log.w(
+                TAG,
+                "Modelo ${variant.fileName} não encontrado: nem em filesDir, nem em " +
+                        "${sideloaded.absolutePath}, nem em assets/${variant.assetPath}"
+            )
             return null
         }
 
@@ -299,6 +313,9 @@ open class LocalModelManager @Inject constructor(
     companion object {
         private const val TAG = "LocalModelManager"
         private const val CRASH_MARKER_NAME = ".model_load_in_progress"
+
+        /** Subpasta de `getExternalFilesDir` onde o `adb push` deposita os GGUF. */
+        const val EXTERNAL_MODELS_DIR = "models"
     }
 }
 

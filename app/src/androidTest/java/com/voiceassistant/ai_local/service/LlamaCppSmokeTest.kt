@@ -2,6 +2,7 @@ package com.voiceassistant.ai_local.service
 
 import android.util.Log
 import androidx.test.platform.app.InstrumentationRegistry
+import com.voiceassistant.ai_local.manager.LocalModelManager
 import com.voiceassistant.ai_local.model.LocalModelConfig
 import com.voiceassistant.ai_local.model.LocalModelVariant
 import com.voiceassistant.llama.LlamaEngine
@@ -18,8 +19,7 @@ import org.junit.Test
  * é *pulado* (assume), não falha, para não quebrar CI sem modelo.
  *
  * Como rodar:
- *   1. `adb push <modelo>.gguf /data/local/tmp/` **ou** ponha o GGUF em
- *      `app/src/main/assets/models/` e deixe o app copiar na primeira execução
+ *   1. `.\scripts\push-model.ps1 -ModelPath <modelo>.gguf`
  *   2. `./gradlew :app:connectedDebugAndroidTest --tests "*LlamaCppSmokeTest*"`
  *
  * Os números impressos no Logcat (tag `LlamaCppSmokeTest`) são o primeiro sinal de
@@ -29,8 +29,8 @@ class LlamaCppSmokeTest {
 
     private val variants = listOf(
         LocalModelConfig.SMOKE_TEST_TINY,
-        LocalModelConfig.GEMMA_1B_Q4_K_M,
-        LocalModelConfig.GEMMA_2B_Q4_K_M
+        LocalModelConfig.GEMMA_3_1B_Q4_K_M,
+        LocalModelConfig.GEMMA_4_E2B_Q4_K_M
     )
 
     private val prompts = listOf(
@@ -44,13 +44,20 @@ class LlamaCppSmokeTest {
         assumeTrue("libllama_bridge.so não disponível nesta ABI", LlamaEngine.isNativeAvailable)
 
         val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val searchDirs = listOfNotNull(
+            context.filesDir,
+            context.getExternalFilesDir(LocalModelManager.EXTERNAL_MODELS_DIR)
+        )
+        // Do menor para o maior: se houver mais de um GGUF no aparelho, o smoke test
+        // usa o mais leve — validar a ponte não precisa dos 3,43 GB do E2B.
         val model = variants
-            .map { java.io.File(context.filesDir, it.fileName) }
-            .firstOrNull { it.exists() && it.length() > 0 }
-            ?: firstPushedModel()
+            .flatMap { variant -> searchDirs.map { java.io.File(it, variant.fileName) } }
+            .filter { it.exists() && it.length() > 0 }
+            .minByOrNull { it.length() }
 
         assumeTrue(
-            "Nenhum GGUF encontrado em filesDir nem em /data/local/tmp — teste pulado",
+            "Nenhum GGUF em filesDir nem em externalFilesDir/models — " +
+                    "rode scripts/push-model.ps1 primeiro. Teste pulado.",
             model != null
         )
 
@@ -94,12 +101,6 @@ class LlamaCppSmokeTest {
             service.unloadModel()
         }
     }
-
-    /** GGUF empurrado por `adb push ... /data/local/tmp/`. */
-    private fun firstPushedModel(): java.io.File? =
-        java.io.File("/data/local/tmp")
-            .listFiles { f -> f.isFile && f.name.endsWith(".gguf") && f.length() > 0 }
-            ?.minByOrNull { it.length() }
 
     companion object {
         private const val TAG = "LlamaCppSmokeTest"

@@ -155,18 +155,36 @@ std::string jstring_to_std(JNIEnv * env, jstring value) {
 }
 
 // Aplica o chat template do GGUF (se houver) a uma única mensagem de usuário.
+//
+// Jinja primeiro, de propósito: renderiza o template embutido no próprio GGUF, que é o
+// que o `llama-server` também faz por padrão. Sem isso, device e servidor formatariam o
+// mesmo prompt de formas diferentes e a comparação entre os tiers perderia o sentido.
+// O caminho legado (lista de templates conhecidos, compilada) só existe como rede de
+// segurança — modelos novos como o Gemma 4 podem não estar nessa lista.
 std::string format_prompt(llama_session * s, const std::string & prompt, bool * out_has_template) {
     const bool has_template = s->templates && common_chat_templates_was_explicit(s->templates.get());
     *out_has_template = has_template;
     if (!has_template) {
         return prompt;
     }
+
     common_chat_msg msg;
     msg.role    = "user";
     msg.content = prompt;
     const std::vector<common_chat_msg> no_history;
-    return common_chat_format_single(s->templates.get(), no_history, msg,
-                                     /* add_ass */ true, /* use_jinja */ false);
+
+    for (const bool use_jinja : { true, false }) {
+        try {
+            return common_chat_format_single(s->templates.get(), no_history, msg,
+                                             /* add_ass */ true, use_jinja);
+        } catch (const std::exception & e) {
+            LOGw("chat template (jinja=%d) falhou: %s", (int) use_jinja, e.what());
+        }
+    }
+
+    LOGw("nenhum chat template aplicável; usando o prompt cru");
+    *out_has_template = false;
+    return prompt;
 }
 
 } // namespace
