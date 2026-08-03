@@ -54,8 +54,8 @@ abstract class ServiceModule {
          */
         @Provides
         fun provideLocalModelConfig(): LocalModelConfig = LocalModelConfig(
-            primary = LocalModelConfig.GEMMA_2B_Q4_K_M,
-            fallback = LocalModelConfig.GEMMA_1B_Q4_K_M
+            primary = LocalModelConfig.GEMMA_4_E2B_Q4_K_M,
+            fallback = LocalModelConfig.GEMMA_3_1B_Q4_K_M
         )
 
         @Provides

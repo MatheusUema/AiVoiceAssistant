@@ -244,9 +244,9 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeLoadModel(
     auto * s = new llama_session();
 
     llama_model_params model_params = llama_model_default_params();
-    // mmap mantém os pesos fora do heap do processo — decisivo no device de 4 GB.
-    model_params.use_mmap  = true;
-    model_params.use_mlock = false;
+    // mmap (sem mlock) mantém os pesos fora do heap do processo e deixa o kernel
+    // despejar páginas sob pressão — decisivo no aparelho de 4 GB.
+    model_params.load_mode = LLAMA_LOAD_MODE_MMAP;
 
     LOGi("carregando modelo: %s", path.c_str());
     s->model = llama_model_load_from_file(path.c_str(), model_params);
