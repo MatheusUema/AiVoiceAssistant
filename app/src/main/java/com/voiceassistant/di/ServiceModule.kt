@@ -4,8 +4,8 @@ import com.voiceassistant.ai_cloud.model.CloudModelConfig
 import com.voiceassistant.ai_cloud.service.CloudInferenceService
 import com.voiceassistant.ai_cloud.service.FirebaseCloudInferenceService
 import com.voiceassistant.ai_local.model.LocalModelConfig
+import com.voiceassistant.ai_local.service.LlamaCppLocalInferenceService
 import com.voiceassistant.ai_local.service.LocalInferenceService
-import com.voiceassistant.ai_local.service.MediaPipeLocalInferenceService
 import com.voiceassistant.ai_server.model.ServerConfig
 import com.voiceassistant.feature_voice.service.AndroidSpeechToTextService
 import com.voiceassistant.feature_voice.service.AndroidTextToSpeechService
@@ -30,9 +30,14 @@ abstract class ServiceModule {
     @Singleton
     abstract fun bindTextToSpeech(impl: AndroidTextToSpeechService): TextToSpeechService
 
+    /**
+     * Tier local roda em llama.cpp/JNI (módulo `:llama`).
+     * Para comparar paridade com o runtime antigo, troque por
+     * `MediaPipeLocalInferenceService` — a interface é a mesma (doc 06 §1.4).
+     */
     @Binds
     @Singleton
-    abstract fun bindLocalInference(impl: MediaPipeLocalInferenceService): LocalInferenceService
+    abstract fun bindLocalInference(impl: LlamaCppLocalInferenceService): LocalInferenceService
 
     @Binds
     @Singleton
@@ -40,13 +45,17 @@ abstract class ServiceModule {
 
     companion object {
         /**
-         * Caminho do modelo local: [LocalModelConfig.DEFAULT_MODEL_ASSET_PATH] -> ficheiro em
-         * `app/src/main/assets/` com esse caminho relativo. Para outro modelo, sobrescreve aqui, ex.:
-         * `LocalModelConfig(modelAssetPath = "models/gemma3-1b-it-int8.task")`.
+         * Modelo local do estudo: o mesmo GGUF `Q4_K_M` nos 3 aparelhos, com um modelo
+         * menor de fallback para quando o primário não couber (Device 2, 4 GB).
+         * O arquivo físico vai em `app/src/main/assets/models/` — ver o README de lá.
+         *
+         * Para validar só o build da ponte JNI, troque `primary` por
+         * `LocalModelConfig.SMOKE_TEST_TINY`.
          */
         @Provides
         fun provideLocalModelConfig(): LocalModelConfig = LocalModelConfig(
-            modelAssetPath = LocalModelConfig.DEFAULT_MODEL_ASSET_PATH
+            primary = LocalModelConfig.GEMMA_2B_Q4_K_M,
+            fallback = LocalModelConfig.GEMMA_1B_Q4_K_M
         )
 
         @Provides

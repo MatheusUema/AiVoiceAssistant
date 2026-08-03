@@ -1,0 +1,154 @@
+package com.voiceassistant.ai_local.service
+
+import android.util.Log
+import com.voiceassistant.ai_local.model.LocalModelConfig
+import com.voiceassistant.llama.LlamaEngine
+import com.voiceassistant.llama.LlamaGenerationException
+import com.voiceassistant.llama.LlamaLoadResult
+import com.voiceassistant.llama.LlamaModelInfo
+import com.voiceassistant.llama.LlamaParams
+import com.voiceassistant.llama.LlamaStats
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * Implementação de [LocalInferenceService] sobre llama.cpp via JNI (módulo `:llama`).
+ *
+ * Substitui o [MediaPipeLocalInferenceService] no binding do Hilt. A troca é do runtime,
+ * não da arquitetura: a interface, o [com.voiceassistant.ai_local.manager.LocalModelManager]
+ * e o InferenceRouter continuam idênticos.
+ *
+ * Motivo da migração (doc 06 §0.2): usando o mesmo motor no device e no `llama-server`,
+ * tokens/s, TTFT e a separação prefill/decode passam a ter a **mesma semântica** nos dois
+ * tiers — condição para comparar local × servidor no estudo de elasticidade.
+ *
+ * Modelos: GGUF (`Q4_K_M`) em `assets/models/`, copiados para `filesDir` pelo manager.
+ *
+ * Esta classe NÃO decide quando carregar ou descarregar — isso é do `LocalModelManager`.
+ */
+@Singleton
+class LlamaCppLocalInferenceService @Inject constructor(
+    private val config: LocalModelConfig
+) : LocalInferenceService {
+
+    private val engine = LlamaEngine()
+
+    private val params: LlamaParams
+        get() = LlamaParams(
+            contextSize = config.contextSize,
+            threads = config.threads,
+            batchSize = config.batchSize,
+            maxTokens = config.maxTokens,
+            temperature = config.temperature,
+            topK = config.topK,
+            topP = config.topP,
+            seed = config.randomSeed
+        )
+
+    override val isModelLoaded: Boolean
+        get() = engine.isLoaded
+
+    override val isAvailable: Boolean
+        get() = engine.isLoaded
+
+    /**
+     * Resultado do último [loadModel] — inclusive quando falhou.
+     * O manager persiste isto como linha de `model_load_log` (Fase 3): um modelo que
+     * não cabe no aparelho é resultado do estudo, não erro a esconder.
+     */
+    @Volatile
+    var lastLoadResult: LlamaLoadResult? = null
+        private set
+
+    /**
+     * Telemetria da última geração (H2/H3: TTFT, prefill vs decode, tokens/s).
+     * Lida pelo InferenceRouter na Fase 2; aqui já fica capturada.
+     */
+    @Volatile
+    var lastStats: LlamaStats? = null
+        private set
+
+    /** Ficha do modelo carregado (descrição, tamanho, n_ctx efetivo, backends ggml). */
+    val modelInfo: LlamaModelInfo?
+        get() = engine.modelInfo
+
+    override suspend fun loadModel(modelPath: String) {
+        if (engine.isLoaded) {
+            Log.d(TAG, "Modelo já carregado, ignorando loadModel()")
+            return
+        }
+
+        Log.i(TAG, "Carregando modelo de: $modelPath")
+        val result = engine.load(modelPath, params)
+        lastLoadResult = result
+
+        when (result) {
+            is LlamaLoadResult.Success -> Log.i(
+                TAG,
+                "Modelo carregado em ${result.loadMs}ms — ${result.info.description}, " +
+                        "n_ctx=${result.info.contextSize}, backends=${result.info.backends}"
+            )
+            is LlamaLoadResult.Failure -> {
+                Log.e(TAG, "Falha ao carregar modelo em ${result.loadMs}ms: ${result.reason}")
+                throw LocalInferenceException("Falha ao carregar modelo local: ${result.reason}")
+            }
+        }
+    }
+
+    override suspend fun generate(prompt: String): String {
+        if (!engine.isLoaded) throw LocalModelNotReadyException()
+
+        try {
+            val generation = engine.generate(prompt, params)
+            lastStats = generation.stats
+
+            val stats = generation.stats
+            Log.d(
+                TAG,
+                "Inferência local: ${stats.generatedTokens} tok em ${stats.totalMs.toInt()}ms " +
+                        "(TTFT ${stats.ttftMs.toInt()}ms, " +
+                        "gen ${"%.1f".format(stats.generatedTokensPerSec)} tok/s)"
+            )
+
+            if (generation.text.isBlank()) {
+                throw LocalInferenceException("Modelo retornou resposta vazia")
+            }
+            return generation.text
+        } catch (e: LocalInferenceException) {
+            throw e
+        } catch (e: LlamaGenerationException) {
+            Log.e(TAG, "Erro na geração local: ${e.message}", e)
+            throw LocalInferenceException("Erro durante inferência local: ${e.message}", e)
+        } catch (e: IllegalStateException) {
+            throw LocalModelNotReadyException(e.message ?: "Modelo local não carregado")
+        }
+    }
+
+    override suspend fun warmup(prompt: String) {
+        if (!engine.isLoaded) {
+            throw LocalModelNotReadyException("Não é possível fazer warmup sem modelo carregado")
+        }
+
+        Log.d(TAG, "Iniciando warmup...")
+        val startTime = System.currentTimeMillis()
+        try {
+            // Poucos tokens: o objetivo é só materializar os buffers de compute e o KV-cache.
+            engine.generate(prompt, params.copy(maxTokens = WARMUP_MAX_TOKENS))
+            Log.i(TAG, "Warmup concluído em ${System.currentTimeMillis() - startTime}ms")
+        } catch (e: Exception) {
+            val elapsed = System.currentTimeMillis() - startTime
+            Log.w(TAG, "Warmup falhou em ${elapsed}ms (não-fatal): ${e.message}")
+        }
+    }
+
+    override fun unloadModel() {
+        engine.unload()
+        lastStats = null
+        Log.i(TAG, "Modelo descarregado")
+    }
+
+    companion object {
+        private const val TAG = "LlamaCppLLM"
+        private const val WARMUP_MAX_TOKENS = 8
+    }
+}

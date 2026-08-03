@@ -27,8 +27,9 @@ signing.properties
 .env.local
 **/google-services.json
 
-# Modelos de ML grandes (baixar manualmente ou via script)
-app/src/main/assets/models/
+# Modelos de ML grandes (baixar manualmente — ver assets/models/README.md)
+app/src/main/assets/models/*
+!app/src/main/assets/models/README.md
 
 # Python cache
 __pycache__/

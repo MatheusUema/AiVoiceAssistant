@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.StatFs
 import android.util.Log
 import com.voiceassistant.ai_local.model.LocalModelConfig
+import com.voiceassistant.ai_local.model.LocalModelVariant
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import javax.inject.Inject
@@ -13,13 +14,13 @@ import javax.inject.Singleton
 
 /**
  * Verifica se o dispositivo atende aos requisitos mínimos para
- * executar o modelo LLM local via MediaPipe.
+ * executar o modelo LLM local via llama.cpp.
  *
  * Checagens:
  *  - RAM total e disponível
  *  - Espaço em disco para o modelo
  *  - Presença do arquivo do modelo no armazenamento interno
- *  - Nível da API (MediaPipe LLM requer API 26+)
+ *  - Nível da API (mínimo do app: 26)
  *
  * O [LocalModelManager] consulta esta classe antes de tentar carregar o modelo,
  * evitando crashes por OOM ou FileNotFoundException.
@@ -73,19 +74,26 @@ open class DeviceCapabilityChecker @Inject constructor(
 
     /**
      * Retorna o [File] onde o modelo deve estar (ou será copiado para).
-     * MediaPipe requer um path no filesystem — não aceita assets diretamente.
+     * O llama.cpp requer um path no filesystem — não aceita assets diretamente.
      */
-    fun getModelFile(): File =
-        File(context.filesDir, config.modelFileName)
+    fun getModelFile(): File = getModelFile(config.primary)
+
+    fun getModelFile(variant: LocalModelVariant): File =
+        File(context.filesDir, variant.fileName)
 
     /**
      * Verifica se o modelo está nos assets do APK (para cópia inicial).
      */
-    fun isModelInAssets(): Boolean = try {
-        context.assets.open(config.modelAssetPath).use { true }
+    fun isModelInAssets(): Boolean = isModelInAssets(config.primary)
+
+    fun isModelInAssets(variant: LocalModelVariant): Boolean = try {
+        context.assets.open(variant.assetPath).use { true }
     } catch (_: Exception) {
         false
     }
+
+    /** RAM total do aparelho em MB — usada para decidir a ordem primário/fallback. */
+    fun totalRamMb(): Long = getTotalRamMb()
 
     private fun getTotalRamMb(): Long {
         val memInfo = ActivityManager.MemoryInfo()
