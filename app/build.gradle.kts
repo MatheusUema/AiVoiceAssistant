@@ -67,13 +67,16 @@ android {
         }
     }
 
-    // Não comprimir modelos LLM — MediaPipe precisa acessá-los sem descompressão
+    // Não comprimir modelos LLM — llama.cpp usa mmap sobre o arquivo, sem descompressão
     androidResources {
-        noCompress += listOf("bin", "tflite", "task", "litertlm")
+        noCompress += listOf("bin", "tflite", "task", "litertlm", "gguf")
     }
 }
 
 dependencies {
+    // --- Tier local: llama.cpp via JNI ---
+    implementation(project(":llama"))
+
     // --- AndroidX Core ---
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
