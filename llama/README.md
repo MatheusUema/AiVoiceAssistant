@@ -45,6 +45,10 @@ E o submódulo (o build falha com mensagem explícita se faltar):
 git submodule update --init --recursive
 ```
 
+O `:app` também exige um `app/google-services.json` (Firebase, tier cloud) — ele é
+gitignored, então cada máquina precisa do seu. Para compilar só o tier local, um
+placeholder com `package_name` `com.voiceassistant` e `com.voiceassistant.debug` basta.
+
 ## Compilar
 
 ```bash
@@ -78,6 +82,24 @@ extensões medidas separadamente, não como default.
 
 São os mesmos campos que o `llama-server` reporta em `timings` — daí a comparabilidade
 device × servidor. Convenção do projeto: `-1` = indisponível.
+
+> ⚠️ `llama_context_params.no_perf` tem default **`true`** nesta versão do llama.cpp: sem
+> `no_perf = false` os timings voltam zerados e H2/H3 somem sem erro nenhum. O
+> `LlamaCppSmokeTest` falha de propósito se `prefillMs`/`decodeMs` vierem zero.
+
+### Estado da validação (Fase 1)
+
+Emulador API 29 x86_64, `qwen2.5-0.5b-instruct-q4_k_m.gguf`, build CPU-only:
+
+```
+carga 216 ms | backends=CPU | n_ctx=2048
+prompt 44 tok, prefill 2341 ms | geração 8 tok, 14,7 tok/s | TTFT 2276 ms
+"Qual é a capital do Brasil?" -> "A capital do Brasil é Brasília."
+```
+
+Falta validar em hardware ARM real (os 3 aparelhos) e conferir se `prefillMs + decodeMs`
+bate com o `totalMs` — no emulador a soma deu ~2,5 % acima, o que precisa de um olhar na
+Fase 2 antes de esses números virarem dado do artigo.
 
 ## Contratos que a ponte garante
 
