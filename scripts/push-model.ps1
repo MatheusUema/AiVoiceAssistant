@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Envia um GGUF para o diretório externo do app, de onde o llama.cpp faz mmap direto.
 
@@ -34,7 +34,10 @@ param(
     [string]$Serial
 )
 
-$ErrorActionPreference = "Stop"
+# Deliberadamente NÃO usamos "Stop": o adb escreve o progresso do push em stderr e o
+# Windows PowerShell 5.1 transforma isso em erro terminante mesmo com exit code 0.
+# As falhas reais são checadas via $LASTEXITCODE logo abaixo de cada chamada.
+$ErrorActionPreference = "Continue"
 
 if (-not (Test-Path $ModelPath)) {
     throw "Arquivo não encontrado: $ModelPath"
