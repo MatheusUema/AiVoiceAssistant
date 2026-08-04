@@ -272,6 +272,9 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeLoadModel(
     ctx_params.n_ubatch        = static_cast<uint32_t>(batch);
     ctx_params.n_threads       = threads;
     ctx_params.n_threads_batch = threads;
+    // Default do llama.cpp é no_perf=true (timings desligados). Sem isto,
+    // llama_perf_context devolve t_p_eval_ms/t_eval_ms zerados e H2/H3 morrem.
+    ctx_params.no_perf         = false;
 
     s->ctx = llama_init_from_model(s->model, ctx_params);
     if (s->ctx == nullptr) {

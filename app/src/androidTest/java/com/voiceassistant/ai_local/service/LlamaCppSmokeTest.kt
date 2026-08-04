@@ -85,7 +85,13 @@ class LlamaCppSmokeTest {
 
                 assertTrue("resposta vazia para: $prompt", answer.isNotBlank())
                 assertTrue("nenhum token gerado", (stats?.generatedTokens ?: 0) > 0)
+                assertTrue("nenhum token de prompt contado", (stats?.promptTokens ?: 0) > 0)
                 assertTrue("TTFT inválido", (stats?.ttftMs ?: -1.0) > 0.0)
+                // H2/H3 dependem dos timings do llama_perf: se `no_perf` voltar ao
+                // default (true), estes campos zeram silenciosamente. Falhar aqui.
+                assertTrue("prefillMs zerado — llama_perf desligado?", stats!!.prefillMs > 0.0)
+                assertTrue("decodeMs zerado — llama_perf desligado?", stats.decodeMs > 0.0)
+                assertTrue("tokens/s de geração inválido", stats.generatedTokensPerSec > 0.0)
 
                 Log.i(
                     TAG,
