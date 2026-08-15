@@ -26,6 +26,17 @@ Trocar de bateria é recompilar com outra chave — não se edita Kotlin entre r
 ```
 
 Chaves em `LocalModelConfig.CATALOG`: `gemma4-e2b`, `gemma3-1b`, `qwen-1.5b`, `qwen-0.5b`.
+
+**Para uma LLM que não está no catálogo**, passe o nome do arquivo direto — não é
+preciso editar Kotlin:
+
+```bash
+.\scripts\push-model.ps1 -ModelPath C:\models\phi-4-mini-Q4_K_M.gguf
+./gradlew :app:assembleDebug -Plocal.model=phi-4-mini-Q4_K_M.gguf
+```
+
+Só vale a pena virar entrada no `CATALOG` um modelo que entra na matriz de verdade
+(para ter rótulo estável no `routing_log` e requisitos de RAM declarados).
 O fallback sai em `-Plocal.model.fallback` (`none` desliga). Exemplos:
 
 ```bash

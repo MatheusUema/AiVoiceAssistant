@@ -22,6 +22,10 @@
 .PARAMETER Serial
     Serial do aparelho (adb -s). Necessário com mais de um device conectado.
 
+.NOTES
+    Qual GGUF o app usa é decidido no build, não aqui:
+        ./gradlew :app:assembleDebug -Plocal.model=<chave ou nome-do-arquivo.gguf>
+
 .EXAMPLE
     .\scripts\push-model.ps1 -ModelPath C:\models\gemma-4-E2B-it-Q4_K_M.gguf
 
