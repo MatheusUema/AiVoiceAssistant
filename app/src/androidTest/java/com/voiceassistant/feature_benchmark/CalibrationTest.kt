@@ -74,6 +74,7 @@ class CalibrationTest {
                     minRamMb = 0
                 ),
                 fallback = null,
+                threads = condition.threads,
                 maxTokens = condition.maxTokens,
                 enableThinking = condition.thinking,
                 // Sem timeout: aqui queremos justamente descobrir quanto demora.
@@ -172,20 +173,30 @@ class CalibrationTest {
     private data class Condition(
         val name: String,
         val maxTokens: Int,
-        val thinking: Boolean
+        val thinking: Boolean,
+        /** 0 = heurística do LlamaEngine (núcleos - 2, saturado em 4). */
+        val threads: Int = 0
     )
 
     private companion object {
         const val TAG = "CalibrationTest"
         const val QUESTIONS_PER_AREA = 2
 
+        /**
+         * Varredura de threads no protocolo do artigo 1 (só a letra).
+         *
+         * O prefill de uma questão do ENEM é **limitado por computação**, não por banda:
+         * ~340 tokens × bilhões de parâmetros é da ordem de TFLOPs, contra alguns MB/s de
+         * leitura de pesos. Isso significa que mais núcleos devem ajudar — e a heurística
+         * herdada do exemplo oficial satura em 4, num aparelho de 8 núcleos.
+         *
+         * O número de threads é uma **condição do protocolo**: precisa ser fixado e
+         * declarado, senão a comparação entre aparelhos mistura hardware com configuração.
+         */
         val CONDITIONS = listOf(
-            // Protocolo do artigo 1: só a letra. Mantém a acurácia comparável com o que
-            // já foi medido no computador.
-            Condition("letra", maxTokens = 4, thinking = false),
-            // Raciocínio liberado: mede o que se ganha em acurácia e o que se paga em
-            // tempo. O teto é generoso porque teto curto mede truncamento, não desempenho.
-            Condition("raciocínio", maxTokens = 512, thinking = true)
+            Condition("letra-t4", maxTokens = 4, thinking = false, threads = 4),
+            Condition("letra-t6", maxTokens = 4, thinking = false, threads = 6),
+            Condition("letra-t8", maxTokens = 4, thinking = false, threads = 8)
         )
     }
 }
