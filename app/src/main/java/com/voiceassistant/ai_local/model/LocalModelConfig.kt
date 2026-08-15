@@ -135,13 +135,52 @@ data class LocalModelConfig(
             label = "gemma-3-1b-it-q4_k_m"
         )
 
-        /** Modelo minúsculo para validar o build da ponte JNI sem depender de RAM. */
-        val SMOKE_TEST_TINY = LocalModelVariant(
+        /**
+         * Segundo modelo da matriz de testes: **Qwen2.5 1.5B instruct Q4_K_M** (~1,1 GB).
+         * A matriz é SEQUENCIAL — bateria completa com o Gemma nos 3 aparelhos, depois
+         * bateria completa com este. Nunca os dois ao mesmo tempo.
+         */
+        val QWEN_1_5B_Q4_K_M = LocalModelVariant(
+            assetPath = "models/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+            sizeMb = 1120,
+            minRamMb = 2048,
+            label = "qwen2.5-1.5b-instruct-q4_k_m"
+        )
+
+        /**
+         * Opção leve do Qwen — e o modelo usado para validar a ponte JNI sem depender
+         * de RAM (por isso também serve de smoke test).
+         */
+        val QWEN_0_5B_Q4_K_M = LocalModelVariant(
             assetPath = "models/qwen2.5-0.5b-instruct-q4_k_m.gguf",
-            sizeMb = 400,
+            sizeMb = 470,
             minRamMb = 1024,
             label = "qwen2.5-0.5b-instruct-q4_k_m"
         )
+
+        /** Alias histórico — o modelo de smoke test é o Qwen 0.5B. */
+        val SMOKE_TEST_TINY = QWEN_0_5B_Q4_K_M
+
+        /**
+         * Catálogo de modelos locais, indexado pela chave usada em
+         * `-Plocal.model=<chave>` (ver `app/build.gradle.kts`).
+         *
+         * Trocar a bateria da matriz é escolher outra chave no build — sem editar Kotlin.
+         */
+        val CATALOG: Map<String, LocalModelVariant> = mapOf(
+            "gemma4-e2b" to GEMMA_4_E2B_Q4_K_M,
+            "gemma3-1b" to GEMMA_3_1B_Q4_K_M,
+            "qwen-1.5b" to QWEN_1_5B_Q4_K_M,
+            "qwen-0.5b" to QWEN_0_5B_Q4_K_M
+        )
+
+        /**
+         * Resolve a chave de build para uma variante.
+         * Chave desconhecida cai no Gemma 4 E2B (o modelo oficial) em vez de estourar:
+         * um typo no `-Plocal.model` não deve derrubar o app no meio de uma coleta.
+         */
+        fun variantOf(key: String): LocalModelVariant =
+            CATALOG[key.trim().lowercase()] ?: GEMMA_4_E2B_Q4_K_M
 
         const val DEFAULT_MODEL_ASSET_PATH: String = "models/gemma-4-E2B-it-Q4_K_M.gguf"
     }

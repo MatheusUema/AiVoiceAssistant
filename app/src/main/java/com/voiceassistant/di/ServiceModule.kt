@@ -1,5 +1,6 @@
 package com.voiceassistant.di
 
+import com.voiceassistant.BuildConfig
 import com.voiceassistant.ai_cloud.model.CloudModelConfig
 import com.voiceassistant.ai_cloud.service.CloudInferenceService
 import com.voiceassistant.ai_cloud.service.FirebaseCloudInferenceService
@@ -45,17 +46,19 @@ abstract class ServiceModule {
 
     companion object {
         /**
-         * Modelo local do estudo: o mesmo GGUF `Q4_K_M` nos 3 aparelhos, com um modelo
-         * menor de fallback para quando o primário não couber (Device 2, 4 GB).
-         * O arquivo físico vai em `app/src/main/assets/models/` — ver o README de lá.
+         * Modelo local ativo, escolhido em tempo de build por `-Plocal.model=<chave>`
+         * (default `gemma4-e2b`). A matriz de testes é sequencial: uma bateria completa
+         * por modelo, e trocar de bateria é só recompilar com outra chave.
          *
-         * Para validar só o build da ponte JNI, troque `primary` por
-         * `LocalModelConfig.SMOKE_TEST_TINY`.
+         * O fallback (`-Plocal.model.fallback`, `none` desliga) só entra quando o
+         * primário não carrega — o caso do Device 2, com 4 GB de RAM.
          */
         @Provides
         fun provideLocalModelConfig(): LocalModelConfig = LocalModelConfig(
-            primary = LocalModelConfig.GEMMA_4_E2B_Q4_K_M,
-            fallback = LocalModelConfig.GEMMA_3_1B_Q4_K_M
+            primary = LocalModelConfig.variantOf(BuildConfig.LOCAL_MODEL),
+            fallback = BuildConfig.LOCAL_MODEL_FALLBACK
+                .takeUnless { it.equals("none", ignoreCase = true) }
+                ?.let { LocalModelConfig.variantOf(it) }
         )
 
         @Provides
