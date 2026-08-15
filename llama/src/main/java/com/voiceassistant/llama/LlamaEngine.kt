@@ -38,6 +38,14 @@ class LlamaEngine {
         private set
 
     /**
+     * Threads de inferência realmente em uso (a heurística resolvida, não o pedido).
+     * Faz parte das condições de execução que o estudo precisa registrar.
+     */
+    @Volatile
+    var threads: Int = -1
+        private set
+
+    /**
      * Carrega o GGUF em [modelPath]. Nunca lança por falha de carga — o motivo volta
      * em [LlamaLoadResult.Failure.reason] para ser registrado como resultado.
      */
@@ -63,13 +71,15 @@ class LlamaEngine {
 
             ensureBackend()
 
+            val resolvedThreads = resolveThreads(params.threads)
             var newHandle = 0L
             val elapsed = measureTimeMillis {
                 newHandle = LlamaBridge.nativeLoadModel(
                     modelPath,
                     params.contextSize,
-                    resolveThreads(params.threads),
-                    params.batchSize
+                    resolvedThreads,
+                    params.batchSize,
+                    params.flashAttention
                 )
             }
 
@@ -80,6 +90,7 @@ class LlamaEngine {
             }
 
             handle = newHandle
+            threads = resolvedThreads
             val info = LlamaModelInfo(
                 description = LlamaBridge.nativeModelDescription(newHandle),
                 sizeBytes = LlamaBridge.nativeModelSizeBytes(newHandle),
@@ -135,6 +146,7 @@ class LlamaEngine {
         if (current != 0L) {
             handle = 0L
             modelInfo = null
+            threads = -1
             LlamaBridge.nativeFreeSession(current)
             Log.i(TAG, "Sessão liberada")
         }

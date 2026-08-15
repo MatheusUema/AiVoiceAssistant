@@ -2,6 +2,7 @@ package com.voiceassistant.ai_local.service
 
 import android.util.Log
 import com.voiceassistant.ai_local.model.LocalModelConfig
+import com.voiceassistant.core.model.InferenceTelemetry
 import com.voiceassistant.llama.LlamaEngine
 import com.voiceassistant.llama.LlamaGenerationException
 import com.voiceassistant.llama.LlamaLoadResult
@@ -60,13 +61,34 @@ class LlamaCppLocalInferenceService @Inject constructor(
     var lastLoadResult: LlamaLoadResult? = null
         private set
 
-    /**
-     * Telemetria da última geração (H2/H3: TTFT, prefill vs decode, tokens/s).
-     * Lida pelo InferenceRouter na Fase 2; aqui já fica capturada.
-     */
+    /** Métricas cruas da ponte JNI para a última geração. */
     @Volatile
     var lastStats: LlamaStats? = null
         private set
+
+    /**
+     * Modelo efetivamente carregado, derivado do arquivo que o manager entregou —
+     * e não da config. É o que o `routing_log` deve registrar quando o fallback assume.
+     */
+    @Volatile
+    override var loadedModelId: String? = null
+        private set
+
+    /** Telemetria da última geração, no formato que o InferenceRouter consome (H2/H3). */
+    override val lastTelemetry: InferenceTelemetry?
+        get() = lastStats?.let { stats ->
+            InferenceTelemetry(
+                modelId = loadedModelId,
+                runtime = RUNTIME,
+                promptTokens = stats.promptTokens,
+                generatedTokens = stats.generatedTokens,
+                ttftMs = stats.ttftMs,
+                ingestionMs = stats.prefillMs,
+                generationMs = stats.decodeMs,
+                threads = engine.threads,
+                backends = engine.modelInfo?.backends
+            )
+        }
 
     /** Ficha do modelo carregado (descrição, tamanho, n_ctx efetivo, backends ggml). */
     val modelInfo: LlamaModelInfo?
@@ -83,12 +105,17 @@ class LlamaCppLocalInferenceService @Inject constructor(
         lastLoadResult = result
 
         when (result) {
-            is LlamaLoadResult.Success -> Log.i(
-                TAG,
-                "Modelo carregado em ${result.loadMs}ms — ${result.info.description}, " +
-                        "n_ctx=${result.info.contextSize}, backends=${result.info.backends}"
-            )
+            is LlamaLoadResult.Success -> {
+                // Do nome do arquivo, não da config: se o fallback assumiu, é este o modelo.
+                loadedModelId = modelPath.substringAfterLast('/').substringBeforeLast('.')
+                Log.i(
+                    TAG,
+                    "Modelo carregado em ${result.loadMs}ms — ${result.info.description}, " +
+                            "n_ctx=${result.info.contextSize}, backends=${result.info.backends}"
+                )
+            }
             is LlamaLoadResult.Failure -> {
+                loadedModelId = null
                 Log.e(TAG, "Falha ao carregar modelo em ${result.loadMs}ms: ${result.reason}")
                 throw LocalInferenceException("Falha ao carregar modelo local: ${result.reason}")
             }
@@ -144,11 +171,13 @@ class LlamaCppLocalInferenceService @Inject constructor(
     override fun unloadModel() {
         engine.unload()
         lastStats = null
+        loadedModelId = null
         Log.i(TAG, "Modelo descarregado")
     }
 
     companion object {
         private const val TAG = "LlamaCppLLM"
         private const val WARMUP_MAX_TOKENS = 8
+        private const val RUNTIME = "llamacpp"
     }
 }

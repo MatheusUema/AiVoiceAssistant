@@ -27,7 +27,13 @@ internal object LlamaBridge {
     external fun nativeLastError(): String
 
     /** @return handle da sessão, ou 0 em falha (motivo em [nativeLastError]). */
-    external fun nativeLoadModel(path: String, nCtx: Int, nThreads: Int, nBatch: Int): Long
+    external fun nativeLoadModel(
+        path: String,
+        nCtx: Int,
+        nThreads: Int,
+        nBatch: Int,
+        flashAttn: Boolean
+    ): Long
     external fun nativeFreeSession(handle: Long)
 
     external fun nativeModelDescription(handle: Long): String

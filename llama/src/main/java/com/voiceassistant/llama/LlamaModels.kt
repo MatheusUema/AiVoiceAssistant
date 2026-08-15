@@ -20,7 +20,15 @@ data class LlamaParams(
     val topK: Int = 20,
     val topP: Float = 0.85f,
     /** 0 = aleatório; qualquer outro valor fixa a seed (reprodutibilidade nos blocos). */
-    val seed: Int = 42
+    val seed: Int = 42,
+
+    /**
+     * Flash Attention. **Explícito de propósito** — o llama.cpp tem um modo AUTO que
+     * decide em runtime, e uma decisão diferente entre aparelhos ou execuções quebraria
+     * a comparabilidade exigida pelo protocolo. Ligado por padrão porque é o que o AUTO
+     * escolheu nos aparelhos-alvo; desligar é uma condição a ser medida, não um acidente.
+     */
+    val flashAttention: Boolean = true
 )
 
 /** Ficha do modelo carregado — alimenta a tabela `model_load_log` (Fase 3). */
