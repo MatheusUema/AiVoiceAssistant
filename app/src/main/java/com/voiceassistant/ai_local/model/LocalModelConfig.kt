@@ -219,12 +219,38 @@ data class LocalModelConfig(
         )
 
         /**
-         * Resolve a chave de build para uma variante.
-         * Chave desconhecida cai no Gemma 4 E2B (o modelo oficial) em vez de estourar:
-         * um typo no `-Plocal.model` não deve derrubar o app no meio de uma coleta.
+         * Resolve o valor de `-Plocal.model` para uma variante. Aceita duas formas:
+         *
+         *  - uma **chave** do [CATALOG] (`gemma4-e2b`, `qwen-1.5b`, …)
+         *  - o **nome de um arquivo** `.gguf` qualquer
+         *
+         * A segunda existe para que testar uma LLM nova não exija editar Kotlin: basta
+         * empurrar o arquivo para o aparelho e recompilar apontando para ele. A matriz
+         * do estudo deve crescer em modelos e em aparelhos, e o catálogo não pode ser
+         * um gargalo para isso.
+         *
+         * Chave desconhecida (nem catálogo, nem `.gguf`) cai no modelo oficial em vez de
+         * estourar: um typo não deve derrubar o app no meio de uma coleta.
          */
-        fun variantOf(key: String): LocalModelVariant =
-            CATALOG[key.trim().lowercase()] ?: GEMMA_4_E2B_Q4_K_M
+        fun variantOf(key: String): LocalModelVariant {
+            val normalized = key.trim()
+            CATALOG[normalized.lowercase()]?.let { return it }
+
+            if (normalized.endsWith(GGUF_EXTENSION, ignoreCase = true)) {
+                return LocalModelVariant(
+                    assetPath = "models/$normalized",
+                    // 0 em ambos: o tamanho real só se sabe com o arquivo em mãos, e um
+                    // gate chutado esconderia a falha de carga que o estudo quer medir.
+                    sizeMb = 0,
+                    minRamMb = 0,
+                    label = normalized.substringBeforeLast('.').lowercase()
+                )
+            }
+
+            return GEMMA_4_E2B_Q4_K_M
+        }
+
+        private const val GGUF_EXTENSION = ".gguf"
 
         const val DEFAULT_MODEL_ASSET_PATH: String = "models/gemma-4-E2B-it-Q4_K_M.gguf"
     }
