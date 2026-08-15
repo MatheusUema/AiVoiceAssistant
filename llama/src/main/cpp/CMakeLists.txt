@@ -60,6 +60,22 @@ set(LLAMA_OPENSSL        OFF CACHE BOOL "" FORCE)
 set(GGML_NATIVE    OFF CACHE BOOL "" FORCE)  # cross-compile: nada de -march=native
 set(GGML_LLAMAFILE OFF CACHE BOOL "" FORCE)
 
+# ── Variantes de CPU escolhidas em runtime ───────────────────────────────────
+# Sem isto, o ggml compila um único kernel ARMv8 *baseline*: medido no Device 1
+# (Dimensity 9200+, ARMv9), o llama_print_system_info reportava apenas
+# "NEON | ARM_FMA | OPENMP | REPACK" — sem DOTPROD nem MATMUL_INT8, que são
+# justamente as instruções que aceleram matmul Q4_K. O efeito era um prefill de
+# ~12 tok/s, apenas 2,5x o decode, quando deveria ser uma ordem de grandeza maior.
+#
+# Com ALL_VARIANTS + BACKEND_DL, o ggml compila várias variantes e escolhe a melhor
+# suportada em runtime — o comportamento de um app real, e o único que faz sentido
+# numa frota com aparelhos de gerações diferentes. A variante escolhida é registrada
+# no `model_load_log`, então a comparabilidade entre aparelhos fica auditável em vez
+# de imposta por baixo.
+set(BUILD_SHARED_LIBS       ON CACHE BOOL "" FORCE)
+set(GGML_BACKEND_DL         ON CACHE BOOL "" FORCE)
+set(GGML_CPU_ALL_VARIANTS   ON CACHE BOOL "" FORCE)
+
 add_subdirectory(${LLAMA_SRC} build-llama)
 
 # ── Ponte JNI ────────────────────────────────────────────────────────────────

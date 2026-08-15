@@ -19,7 +19,8 @@ internal object LlamaBridge {
 
     val isNativeAvailable: Boolean get() = loadError == null
 
-    external fun nativeInitBackend()
+    /** @param nativeLibDir onde estão as variantes de CPU (`applicationInfo.nativeLibraryDir`). */
+    external fun nativeInitBackend(nativeLibDir: String)
     external fun nativeShutdownBackend()
 
     external fun nativeSystemInfo(): String

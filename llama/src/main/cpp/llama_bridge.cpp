@@ -267,10 +267,22 @@ formatted_prompt format_prompt(llama_session * s, const std::string & prompt, bo
 extern "C" {
 
 JNIEXPORT void JNICALL
-Java_com_voiceassistant_llama_LlamaBridge_nativeInitBackend(JNIEnv * /*env*/, jobject /*thiz*/) {
+Java_com_voiceassistant_llama_LlamaBridge_nativeInitBackend(JNIEnv * env, jobject /*thiz*/, jstring jnative_lib_dir) {
     llama_log_set(log_callback, nullptr);
+
+    // Carrega as variantes de CPU do diretório de bibliotecas do app. É isto que faz o
+    // ggml escolher em runtime o kernel com DOTPROD/i8mm quando o aparelho suporta; sem
+    // esta chamada só o backend baseline fica registrado, e o prefill despenca.
+    const std::string lib_dir = jstring_to_std(env, jnative_lib_dir);
+    if (!lib_dir.empty()) {
+        LOGi("carregando backends de %s", lib_dir.c_str());
+        ggml_backend_load_all_from_path(lib_dir.c_str());
+    } else {
+        ggml_backend_load_all();
+    }
+
     llama_backend_init();
-    LOGi("backend inicializado");
+    LOGi("backend inicializado | %s", llama_print_system_info());
 }
 
 JNIEXPORT void JNICALL

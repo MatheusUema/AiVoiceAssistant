@@ -21,7 +21,15 @@ import kotlin.system.measureTimeMillis
  *    de lançar quando o modelo não cabe ou o arquivo é inválido.
  *  - **Telemetria**: [generate] devolve texto + [LlamaStats] na mesma chamada.
  */
-class LlamaEngine {
+class LlamaEngine(
+    /**
+     * Diretório das bibliotecas nativas do app (`applicationInfo.nativeLibraryDir`).
+     * É de lá que o ggml carrega as variantes de CPU e escolhe a melhor suportada —
+     * sem isso, só o kernel baseline é registrado e o prefill fica ordens de grandeza
+     * abaixo do que o aparelho consegue.
+     */
+    private val nativeLibDir: String = ""
+) {
 
     private val executor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "llama-inference").apply { priority = Thread.NORM_PRIORITY }
@@ -47,6 +55,17 @@ class LlamaEngine {
      */
     @Volatile
     var threads: Int = -1
+        private set
+
+    /**
+     * Features de CPU que o ggml detectou (ex.: "NEON | ARM_FMA | DOTPROD | MATMUL_INT8").
+     *
+     * Vai para o `model_load_log`: como a variante é escolhida em runtime, dois aparelhos
+     * podem estar rodando kernels diferentes, e sem registrar isso a comparação entre eles
+     * ficaria sem explicação.
+     */
+    @Volatile
+    var systemInfo: String? = null
         private set
 
     /**
@@ -187,10 +206,10 @@ class LlamaEngine {
 
     private fun ensureBackend() {
         if (!backendReady) {
-            LlamaBridge.nativeInitBackend()
+            LlamaBridge.nativeInitBackend(nativeLibDir)
             backendReady = true
-            Log.i(TAG, "Backends: ${LlamaBridge.nativeBackends()}")
-            Log.d(TAG, LlamaBridge.nativeSystemInfo())
+            systemInfo = LlamaBridge.nativeSystemInfo()
+            Log.i(TAG, "Backends: ${LlamaBridge.nativeBackends()} | $systemInfo")
         }
     }
 

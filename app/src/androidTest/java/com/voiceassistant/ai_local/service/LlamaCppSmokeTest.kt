@@ -79,7 +79,7 @@ class LlamaCppSmokeTest {
             // geração — inclusive impedindo verificar a separação raciocínio/resposta.
             maxTokens = 768
         )
-        val service = LlamaCppLocalInferenceService(config)
+        val service = LlamaCppLocalInferenceService(context, config)
 
         try {
             service.loadModel(model.absolutePath)
@@ -194,6 +194,7 @@ class LlamaCppSmokeTest {
 
         val timeoutMs = 1_500L
         val service = LlamaCppLocalInferenceService(
+            InstrumentationRegistry.getInstrumentation().targetContext,
             LocalModelConfig(
                 primary = variantFor(model!!),
                 fallback = null,

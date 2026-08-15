@@ -70,8 +70,11 @@ android {
 
     packaging {
         jniLibs {
-            // As .so do llama.cpp/ggml precisam ficar como arquivos reais no APK.
-            useLegacyPackaging = false
+            // Extrair as .so na instalação é obrigatório aqui: com GGML_BACKEND_DL o ggml
+            // faz `dlopen` das variantes de CPU por caminho absoluto, e isso exige arquivos
+            // reais em disco. Sem extrair, o diretório de libs nem existe e nenhum backend
+            // é registrado — o app carrega e não gera nada.
+            useLegacyPackaging = true
         }
     }
 }
