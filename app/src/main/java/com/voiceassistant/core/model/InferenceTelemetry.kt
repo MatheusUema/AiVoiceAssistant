@@ -47,7 +47,24 @@ data class InferenceTelemetry(
     val threads: Int = UNAVAILABLE_INT,
 
     /** Backends ggml ativos ("CPU", "Vulkan,CPU"). */
-    val backends: String? = null
+    val backends: String? = null,
+
+    /**
+     * True se a geração foi cortada pelo teto de tokens em vez de terminar sozinha.
+     *
+     * Uma resposta truncada mede o teto configurado, não a capacidade do aparelho —
+     * misturá-la com as demais enviesa acurácia e latência ao mesmo tempo. Com modelos
+     * que raciocinam isso é comum, então precisa ser filtrável na análise.
+     */
+    val truncated: Boolean = false,
+
+    /**
+     * Por que a geração terminou: `END_OF_GENERATION`, `MAX_TOKENS` ou `TIMEOUT`.
+     *
+     * `TIMEOUT` é o caso que mais interessa ao estudo: significa que o aparelho não
+     * sustentou o modelo dentro de um tempo que um aluno aceitaria esperar.
+     */
+    val stopReason: String? = null
 ) {
     /** Tokens de prompt por segundo (velocidade de ingestão). */
     val promptTokensPerSec: Double

@@ -65,8 +65,15 @@ data class LocalModelConfig(
     /** Tamanho do batch de prefill. */
     val batchSize: Int = 256,
 
-    /** Máximo de tokens gerados por resposta (`n_predict`). */
-    val maxTokens: Int = 512,
+    /**
+     * Máximo de tokens gerados por resposta (`n_predict`).
+     *
+     * 1024 e não 512: medido no Device 1, o Gemma 4 gastou 422 tokens só raciocinando
+     * numa pergunta trivial e ainda estourou o teto de 512 sem chegar à resposta. Com
+     * teto curto a bateria mede truncamento, não desempenho. **Precisa de calibração**
+     * na Fase 4 contra o comprimento real das questões do ENEM.
+     */
+    val maxTokens: Int = 1024,
 
     /** Temperatura baixa para respostas factuais e consistentes */
     val temperature: Float = 0.2f,
@@ -87,7 +94,44 @@ data class LocalModelConfig(
     val warmupEnabled: Boolean = true,
 
     /** Prompt usado no warmup — deve ser curto para não desperdiçar tempo */
-    val warmupPrompt: String = "Olá"
+    val warmupPrompt: String = "Olá",
+
+    /**
+     * Raciocínio ligado em modelos que o suportam (Gemma 4).
+     *
+     * Ligado é o default porque é o comportamento real do modelo — o custo de pensar
+     * faz parte do custo de rodá-lo no aparelho, que é o que o estudo mede. Desligar é
+     * uma condição experimental a declarar no protocolo, e a comparação de tokens/s
+     * com o Qwen só fecha usando `reasoningTokens`/`answerTokens` separados.
+     */
+    val enableThinking: Boolean = true,
+
+    /**
+     * Tempo máximo de geração local antes de desistir (ms). 0 = sem limite.
+     *
+     * Uma geração que estoura isto é **resultado**, não erro: significa que o aparelho
+     * não sustenta aquele modelo em uso real. Também evita que a coleta fique horas
+     * presa num caso perdido nos aparelhos mais fracos.
+     *
+     * 180 s é deliberadamente folgado. No Device 1 — o mais rápido dos três — o Gemma 4
+     * E2B levou 74 s numa única resposta; um limite curto transformaria a bateria inteira
+     * em timeouts e destruiria os dados. Como a latência completa fica registrada,
+     * limiares mais rígidos ("o aluno teria esperado 20 s?") podem ser aplicados depois,
+     * na análise, sem precisar recoletar.
+     */
+    val generationTimeoutMs: Long = 180_000L,
+
+    /**
+     * Orçamento de tempo quando **há** para onde escalar (servidor na LAN ou nuvem).
+     *
+     * Bem mais curto que [generationTimeoutMs] porque as latências somam: esperar o
+     * timeout longo e só então chamar a nuvem entrega uma resposta pior que não ter
+     * fallback nenhum. Aqui desistir cedo é a decisão certa — existe alternativa.
+     *
+     * Offline ou em modo privacidade não há alternativa, e aí vale a paciência do
+     * [generationTimeoutMs]: uma resposta lenta ainda é melhor que nenhuma.
+     */
+    val generationTimeoutWithFallbackMs: Long = 30_000L
 ) {
     // ── Compatibilidade: o resto do app (InferenceRouter, DeviceCapabilityChecker)
     //    continua falando do "modelo atual" sem conhecer o par primário/fallback.

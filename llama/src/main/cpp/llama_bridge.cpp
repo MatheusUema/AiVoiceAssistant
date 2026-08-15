@@ -14,14 +14,18 @@
 #include <android/log.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <string>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "common.h"
 #include "sampling.h"
 #include "chat.h"
+#include "peg-parser.h"
 #include "llama.h"
 #include "ggml-backend.h"
 
@@ -96,6 +100,34 @@ struct llama_session {
     double  total_ms         = kUnavailable;
     int32_t n_prompt_tokens  = 0;
     int32_t n_gen_tokens     = 0;
+    int32_t n_reasoning_tokens = 0;
+
+    /**
+     * Texto do canal de raciocínio da última geração, separado da resposta.
+     * O Gemma 4 raciocina antes de responder; sem separar, o "pensamento" chega ao aluno
+     * como se fosse a resposta e os tokens dele se misturam aos da resposta em H3.
+     */
+    std::string last_reasoning;
+
+    /** True se o template do modelo declara suporte a raciocínio. */
+    bool supports_thinking = false;
+
+    /**
+     * True se a geração parou no token de fim; false se bateu no teto de tokens.
+     * Uma resposta truncada é um dado de natureza diferente — precisa ser filtrável.
+     */
+    bool stopped_at_eog = false;
+
+    /**
+     * Pedido de cancelamento, vindo de outra thread (o watchdog de timeout).
+     * Atômico porque o laço de geração roda na thread de inferência e quem cancela
+     * é outra. O laço checa a cada token: abandonar a chamada JNI não é opção, ela
+     * é bloqueante e continuaria queimando CPU e segurando a thread.
+     */
+    std::atomic<bool> cancel_requested{false};
+
+    /** True se a última geração terminou por cancelamento (timeout). */
+    bool was_cancelled = false;
 
     ~llama_session() {
         if (batch_ready) {
@@ -154,37 +186,80 @@ std::string jstring_to_std(JNIEnv * env, jstring value) {
     return out;
 }
 
-// Aplica o chat template do GGUF (se houver) a uma única mensagem de usuário.
+// Resultado da formatação: o prompt pronto e o que é preciso guardar para depois
+// separar raciocínio de resposta na saída.
+struct formatted_prompt {
+    std::string        text;
+    bool               has_template = false;
+    common_chat_params chat_params;
+};
+
+// Aplica o chat template do GGUF a uma única mensagem de usuário.
 //
-// Jinja primeiro, de propósito: renderiza o template embutido no próprio GGUF, que é o
-// que o `llama-server` também faz por padrão. Sem isso, device e servidor formatariam o
-// mesmo prompt de formas diferentes e a comparação entre os tiers perderia o sentido.
-// O caminho legado (lista de templates conhecidos, compilada) só existe como rede de
-// segurança — modelos novos como o Gemma 4 podem não estar nessa lista.
-std::string format_prompt(llama_session * s, const std::string & prompt, bool * out_has_template) {
-    const bool has_template = s->templates && common_chat_templates_was_explicit(s->templates.get());
-    *out_has_template = has_template;
-    if (!has_template) {
-        return prompt;
+// Usa `common_chat_templates_apply` (e não o atalho `common_chat_format_single`) porque
+// só ele devolve o `common_chat_params` — que carrega o *formato* detectado e é o que
+// permite depois chamar `common_chat_parse` e separar `reasoning_content` de `content`.
+// É exatamente o caminho do `llama-server`: mesma formatação e mesma separação nos dois
+// tiers, que é a condição para os números serem comparáveis.
+formatted_prompt format_prompt(llama_session * s, const std::string & prompt, bool enable_thinking) {
+    formatted_prompt out;
+    out.has_template = s->templates && common_chat_templates_was_explicit(s->templates.get());
+    if (!out.has_template) {
+        out.text = prompt;
+        return out;
     }
 
     common_chat_msg msg;
     msg.role    = "user";
     msg.content = prompt;
-    const std::vector<common_chat_msg> no_history;
 
-    for (const bool use_jinja : { true, false }) {
-        try {
-            return common_chat_format_single(s->templates.get(), no_history, msg,
-                                             /* add_ass */ true, use_jinja);
-        } catch (const std::exception & e) {
-            LOGw("chat template (jinja=%d) falhou: %s", (int) use_jinja, e.what());
+    common_chat_templates_inputs inputs;
+    inputs.messages.push_back(msg);
+    inputs.add_generation_prompt = true;
+    inputs.use_jinja             = true;
+    // Raciocínio ligado é o comportamento real do modelo; desligar é uma *condição
+    // experimental*, não o default. Quem decide é o protocolo, não a ponte.
+    inputs.enable_thinking       = enable_thinking;
+    inputs.reasoning_format      = COMMON_REASONING_FORMAT_AUTO;
+
+    try {
+        out.chat_params        = common_chat_templates_apply(s->templates.get(), inputs);
+        out.text               = out.chat_params.prompt;
+        s->supports_thinking   = out.chat_params.supports_thinking;
+
+        // Diagnóstico do que o llama.cpp detectou: é isto que decide se
+        // common_chat_parse consegue separar raciocínio de resposta.
+        std::string end_tags;
+        for (const auto & t : out.chat_params.thinking_end_tags) {
+            if (!end_tags.empty()) { end_tags += "|"; }
+            end_tags += t;
         }
+        LOGi("chat: format=%s supports_thinking=%d start_tag='%s' end_tags='%s' parser='%s'",
+             common_chat_format_name(out.chat_params.format),
+             (int) out.chat_params.supports_thinking,
+             out.chat_params.thinking_start_tag.c_str(),
+             end_tags.c_str(),
+             out.chat_params.parser.c_str());
+        return out;
+    } catch (const std::exception & e) {
+        LOGw("chat template (jinja) falhou: %s", e.what());
+    }
+
+    // Rede de segurança: o caminho legado usa a lista de templates compilada, que pode
+    // não conhecer modelos novos. Sem separação de raciocínio, mas melhor que nada.
+    try {
+        const std::vector<common_chat_msg> no_history;
+        out.text = common_chat_format_single(s->templates.get(), no_history, msg,
+                                             /* add_ass */ true, /* use_jinja */ false);
+        return out;
+    } catch (const std::exception & e) {
+        LOGw("chat template (legado) falhou: %s", e.what());
     }
 
     LOGw("nenhum chat template aplicável; usando o prompt cru");
-    *out_has_template = false;
-    return prompt;
+    out.has_template = false;
+    out.text         = prompt;
+    return out;
 }
 
 } // namespace
@@ -355,7 +430,8 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeCountTokens(JNIEnv * env, jobjec
 JNIEXPORT jstring JNICALL
 Java_com_voiceassistant_llama_LlamaBridge_nativeGenerate(
         JNIEnv * env, jobject /*thiz*/, jlong handle, jstring jprompt,
-        jint max_tokens, jfloat temperature, jint top_k, jfloat top_p, jint seed) {
+        jint max_tokens, jfloat temperature, jint top_k, jfloat top_p, jint seed,
+        jboolean enable_thinking) {
     clear_error();
 
     auto * s = as_session(handle);
@@ -365,7 +441,10 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeGenerate(
     }
 
     s->ttft_ms = s->prefill_ms = s->decode_ms = s->total_ms = kUnavailable;
-    s->n_prompt_tokens = s->n_gen_tokens = 0;
+    s->n_prompt_tokens = s->n_gen_tokens = s->n_reasoning_tokens = 0;
+    s->last_reasoning.clear();
+    s->was_cancelled = false;
+    s->cancel_requested.store(false, std::memory_order_relaxed);
 
     const double t_start = now_ms();
 
@@ -378,11 +457,10 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeGenerate(
     llama_memory_clear(llama_get_memory(s->ctx), true);
     llama_perf_context_reset(s->ctx);
 
-    bool              has_template = false;
-    const std::string raw_prompt   = jstring_to_std(env, jprompt);
-    const std::string formatted    = format_prompt(s, raw_prompt, &has_template);
+    const std::string      raw_prompt = jstring_to_std(env, jprompt);
+    const formatted_prompt fmt        = format_prompt(s, raw_prompt, enable_thinking);
 
-    auto tokens = common_tokenize(s->ctx, formatted, has_template, has_template);
+    auto tokens = common_tokenize(s->ctx, fmt.text, fmt.has_template, fmt.has_template);
     if (tokens.empty()) {
         set_error("prompt tokenizou para 0 tokens");
         return nullptr;
@@ -404,6 +482,16 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeGenerate(
     // ── Prefill (ingestão do prompt) ────────────────────────────────────────
     llama_pos pos = 0;
     for (int i = 0; i < (int) tokens.size(); i += s->n_batch) {
+        // O prefill também precisa ser interrompível: com prompts longos (questões do
+        // ENEM) em aparelhos lentos, só a ingestão pode passar do limite de tempo, e o
+        // timeout só faria efeito depois — atrasando o corte em vários segundos.
+        if (s->cancel_requested.load(std::memory_order_relaxed)) {
+            LOGw("cancelado durante o prefill, no offset %d de %d", i, (int) tokens.size());
+            s->was_cancelled = true;
+            s->total_ms      = now_ms() - t_start;
+            return env->NewStringUTF("");
+        }
+
         const int chunk = std::min((int) tokens.size() - i, s->n_batch);
         common_batch_clear(s->batch);
         for (int j = 0; j < chunk; j++) {
@@ -431,9 +519,19 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeGenerate(
 
     const llama_vocab * vocab = llama_model_get_vocab(s->model);
     std::string         out;
-    bool                failed = false;
+    bool                failed         = false;
+    bool                stopped_at_eog = false;
+    bool                cancelled      = false;
 
     for (int i = 0; i < n_predict; i++) {
+        // Checagem por token: é o grão mais fino possível sem interromper um decode
+        // no meio. No pior caso o cancelamento custa o tempo de um token.
+        if (s->cancel_requested.load(std::memory_order_relaxed)) {
+            LOGw("geração cancelada após %d tokens", i);
+            cancelled = true;
+            break;
+        }
+
         const llama_token tok = common_sampler_sample(sampler, s->ctx, -1);
         common_sampler_accept(sampler, tok, true);
 
@@ -441,6 +539,7 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeGenerate(
             s->ttft_ms = now_ms() - t_start;
         }
         if (llama_vocab_is_eog(vocab, tok)) {
+            stopped_at_eog = true;
             break;
         }
 
@@ -480,23 +579,88 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeGenerate(
     if (perf.n_p_eval > 0) { s->n_prompt_tokens = perf.n_p_eval; }
     if (perf.n_eval   > 0) { s->n_gen_tokens    = perf.n_eval;   }
 
-    const std::string safe = trim_to_valid_utf8(out);
-    return env->NewStringUTF(safe.c_str());
+    // Separa raciocínio de resposta. Sem isto o "Thinking Process:" do Gemma 4 chega ao
+    // aluno como se fosse a resposta, e os tokens de pensamento entram em H3 misturados
+    // aos de resposta — tornando tokens/s incomparável com um modelo que não raciocina.
+    std::string answer = trim_to_valid_utf8(out);
+    if (fmt.has_template) {
+        try {
+            common_chat_parser_params pparams(fmt.chat_params);
+            pparams.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            pparams.parse_tool_calls = false;
+
+            // O construtor de common_chat_parser_params copia só `format` e
+            // `generation_prompt` — **não** o parser PEG. Sem carregá-lo, formatos
+            // "peg-*" (como o peg-gemma4 do Gemma 4) caem num caminho genérico que
+            // devolve tudo como conteúdo e nunca extrai o raciocínio.
+            if (!fmt.chat_params.parser.empty()) {
+                pparams.parser = common_peg_arena::from_json(
+                    nlohmann::json::parse(fmt.chat_params.parser));
+            }
+
+            // is_partial quando a geração parou no teto de tokens em vez de no EOG: sem
+            // isso, uma geração cortada no meio do pensamento não fecha a regra do PEG,
+            // o raciocínio não é extraído e o "Thinking Process" vaza como resposta.
+            // Truncamento vai acontecer na coleta, então tem que ser tratado, não evitado.
+            const bool is_partial = !stopped_at_eog;
+
+            // A gramática PEG do modelo começa pelo generation prompt (para o Gemma 4,
+            // o literal "<|turn>model\n"), que o modelo não regenera na saída. Sem
+            // recolocá-lo, a regra não casa, o raciocínio não é extraído e o parser
+            // ainda devolve o prompt colado no início do conteúdo.
+            const std::string & gen_prompt = fmt.chat_params.generation_prompt;
+            const common_chat_msg parsed =
+                common_chat_parse(gen_prompt + answer, is_partial, pparams);
+
+            // Cinto e suspensório: se o prompt sobreviver no conteúdo, tira daqui.
+            std::string content = parsed.content;
+            if (!gen_prompt.empty() && content.rfind(gen_prompt, 0) == 0) {
+                content.erase(0, gen_prompt.size());
+            }
+
+            LOGi("parse: is_partial=%d reasoning=%zu chars content=%zu chars content='%.60s'",
+                 (int) is_partial, parsed.reasoning_content.size(), content.size(), content.c_str());
+
+            if (!parsed.reasoning_content.empty()) {
+                s->last_reasoning     = parsed.reasoning_content;
+                s->n_reasoning_tokens =
+                    (int32_t) common_tokenize(s->ctx, parsed.reasoning_content, false, false).size();
+            }
+
+            // Só troca pela resposta quando o parser separou raciocínio E achou resposta.
+            // Sem essa guarda, uma geração cortada no meio do pensamento devolveria
+            // conteúdo vazio ou o próprio prompt como "resposta" — regressão vista no
+            // Device 1. Truncamento fica visível via `stoppedAtEog`, não escondido.
+            if (!parsed.reasoning_content.empty() && !content.empty()) {
+                answer = content;
+            }
+        } catch (const std::exception & e) {
+            LOGw("common_chat_parse falhou (%s); devolvendo o texto cru", e.what());
+        }
+    }
+
+    s->stopped_at_eog = stopped_at_eog;
+    s->was_cancelled  = cancelled;
+    return env->NewStringUTF(answer.c_str());
 }
 
 /**
  * Métricas da última geração. Layout (espelhado em LlamaStats.fromArray):
- *  [0] ttftMs  [1] prefillMs  [2] decodeMs  [3] totalMs  [4] promptTokens  [5] generatedTokens
+ *  [0] ttftMs  [1] prefillMs  [2] decodeMs  [3] totalMs  [4] promptTokens
+ *  [5] generatedTokens  [6] reasoningTokens  [7] supportsThinking (1/0)
+ *  [8] stoppedAtEog (1/0 — 0 significa resposta truncada no teto de tokens)
+ *  [9] cancelled (1/0 — geração interrompida por timeout)
  * -1 = indisponível (mesma convenção do resto do projeto).
  */
 JNIEXPORT jdoubleArray JNICALL
 Java_com_voiceassistant_llama_LlamaBridge_nativeLastStats(JNIEnv * env, jobject /*thiz*/, jlong handle) {
-    jdoubleArray result = env->NewDoubleArray(6);
+    constexpr int kStatsLen = 10;
+    jdoubleArray result = env->NewDoubleArray(kStatsLen);
     if (result == nullptr) {
         return nullptr;
     }
     auto * s = as_session(handle);
-    double values[6] = { -1, -1, -1, -1, -1, -1 };
+    double values[kStatsLen] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
     if (s != nullptr) {
         values[0] = s->ttft_ms;
         values[1] = s->prefill_ms;
@@ -504,9 +668,33 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeLastStats(JNIEnv * env, jobject 
         values[3] = s->total_ms;
         values[4] = s->n_prompt_tokens;
         values[5] = s->n_gen_tokens;
+        values[6] = s->n_reasoning_tokens;
+        values[7] = s->supports_thinking ? 1 : 0;
+        values[8] = s->stopped_at_eog ? 1 : 0;
+        values[9] = s->was_cancelled ? 1 : 0;
     }
-    env->SetDoubleArrayRegion(result, 0, 6, values);
+    env->SetDoubleArrayRegion(result, 0, kStatsLen, values);
     return result;
+}
+
+/**
+ * Pede o cancelamento da geração em curso. Chamável de qualquer thread — é o watchdog
+ * de timeout que chama, enquanto a thread de inferência está bloqueada no laço.
+ * Não bloqueia: apenas sinaliza; o laço encerra no próximo token.
+ */
+JNIEXPORT void JNICALL
+Java_com_voiceassistant_llama_LlamaBridge_nativeRequestCancel(JNIEnv * /*env*/, jobject /*thiz*/, jlong handle) {
+    auto * s = as_session(handle);
+    if (s != nullptr) {
+        s->cancel_requested.store(true, std::memory_order_relaxed);
+    }
+}
+
+/** Texto do canal de raciocínio da última geração ("" se não houve). */
+JNIEXPORT jstring JNICALL
+Java_com_voiceassistant_llama_LlamaBridge_nativeLastReasoning(JNIEnv * env, jobject /*thiz*/, jlong handle) {
+    auto * s = as_session(handle);
+    return env->NewStringUTF(s != nullptr ? s->last_reasoning.c_str() : "");
 }
 
 } // extern "C"

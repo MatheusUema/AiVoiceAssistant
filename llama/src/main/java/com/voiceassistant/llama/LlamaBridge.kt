@@ -49,8 +49,13 @@ internal object LlamaBridge {
         temperature: Float,
         topK: Int,
         topP: Float,
-        seed: Int
+        seed: Int,
+        enableThinking: Boolean
     ): String?
 
     external fun nativeLastStats(handle: Long): DoubleArray?
+    external fun nativeLastReasoning(handle: Long): String
+
+    /** Sinaliza cancelamento; seguro chamar de outra thread durante a geração. */
+    external fun nativeRequestCancel(handle: Long)
 }

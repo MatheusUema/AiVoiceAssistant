@@ -9,6 +9,7 @@ import com.voiceassistant.llama.LlamaLoadResult
 import com.voiceassistant.llama.LlamaModelInfo
 import com.voiceassistant.llama.LlamaParams
 import com.voiceassistant.llama.LlamaStats
+import com.voiceassistant.llama.LlamaStopReason
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -43,7 +44,9 @@ class LlamaCppLocalInferenceService @Inject constructor(
             temperature = config.temperature,
             topK = config.topK,
             topP = config.topP,
-            seed = config.randomSeed
+            seed = config.randomSeed,
+            enableThinking = config.enableThinking,
+            generationTimeoutMs = config.generationTimeoutMs
         )
 
     override val isModelLoaded: Boolean
@@ -82,11 +85,14 @@ class LlamaCppLocalInferenceService @Inject constructor(
                 runtime = RUNTIME,
                 promptTokens = stats.promptTokens,
                 generatedTokens = stats.generatedTokens,
+                reasoningTokens = stats.reasoningTokens,
                 ttftMs = stats.ttftMs,
                 ingestionMs = stats.prefillMs,
                 generationMs = stats.decodeMs,
                 threads = engine.threads,
-                backends = engine.modelInfo?.backends
+                backends = engine.modelInfo?.backends,
+                truncated = stats.truncated,
+                stopReason = stats.stopReason.name
             )
         }
 
@@ -122,11 +128,14 @@ class LlamaCppLocalInferenceService @Inject constructor(
         }
     }
 
-    override suspend fun generate(prompt: String): String {
+    override suspend fun generate(prompt: String): String =
+        generate(prompt, config.generationTimeoutMs)
+
+    override suspend fun generate(prompt: String, timeoutMs: Long): String {
         if (!engine.isLoaded) throw LocalModelNotReadyException()
 
         try {
-            val generation = engine.generate(prompt, params)
+            val generation = engine.generate(prompt, params.copy(generationTimeoutMs = timeoutMs))
             lastStats = generation.stats
 
             val stats = generation.stats
@@ -134,8 +143,27 @@ class LlamaCppLocalInferenceService @Inject constructor(
                 TAG,
                 "Inferência local: ${stats.generatedTokens} tok em ${stats.totalMs.toInt()}ms " +
                         "(TTFT ${stats.ttftMs.toInt()}ms, " +
-                        "gen ${"%.1f".format(stats.generatedTokensPerSec)} tok/s)"
+                        "gen ${"%.1f".format(stats.generatedTokensPerSec)} tok/s" +
+                        if (stats.reasoningTokens > 0) {
+                            ", ${stats.reasoningTokens} de raciocínio + " +
+                                    "${stats.answerTokens} de resposta)"
+                        } else ")"
             )
+
+            // Timeout vira erro para o aluno, mas a telemetria fica em `lastStats`:
+            // no estudo, "não respondeu a tempo" é um dado sobre o aparelho, não uma
+            // falha a descartar.
+            if (stats.stopReason == LlamaStopReason.TIMEOUT) {
+                Log.w(
+                    TAG,
+                    "Geração cancelada por timeout após ${stats.totalMs.toInt()}ms " +
+                            "com ${stats.generatedTokens} tokens"
+                )
+                throw LocalInferenceTimeoutException(
+                    elapsedMs = stats.totalMs.toLong(),
+                    generatedTokens = stats.generatedTokens
+                )
+            }
 
             if (generation.text.isBlank()) {
                 throw LocalInferenceException("Modelo retornou resposta vazia")
