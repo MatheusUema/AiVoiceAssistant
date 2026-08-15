@@ -1,10 +1,15 @@
 package com.voiceassistant.ai_local.manager
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import com.voiceassistant.ai_local.model.LocalModelConfig
 import com.voiceassistant.ai_local.model.LocalModelVariant
+import com.voiceassistant.ai_local.service.LlamaCppLocalInferenceService
 import com.voiceassistant.ai_local.service.LocalInferenceService
+import com.voiceassistant.core.device.DeviceProfileProvider
+import com.voiceassistant.core.logging.ModelLoadLogEntry
+import com.voiceassistant.core.logging.RoutingLogger
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -46,7 +51,9 @@ open class LocalModelManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val localInferenceService: LocalInferenceService,
     private val deviceCapabilityChecker: DeviceCapabilityChecker,
-    private val config: LocalModelConfig
+    private val config: LocalModelConfig,
+    private val routingLogger: RoutingLogger,
+    private val deviceProfileProvider: DeviceProfileProvider
 ) {
     private val managerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -133,6 +140,10 @@ open class LocalModelManager @Inject constructor(
                 return
             }
 
+            // A ficha do aparelho tem que existir antes da primeira linha de log: é ela
+            // que dá sentido ao `deviceId` das outras duas tabelas.
+            deviceProfileProvider.captureAndStore()
+
             val crashedVariant = consumeCrashMarker()
             val attempts = mutableListOf<LocalModelLoadAttempt>()
 
@@ -140,6 +151,7 @@ open class LocalModelManager @Inject constructor(
                 val attempt = tryLoad(variant, capability, crashedVariant)
                 attempts += attempt
                 _loadAttempts.value = attempts.toList()
+                persist(attempt, capability)
 
                 if (attempt.outcome == LoadOutcome.SUCCESS) {
                     activeVariant = variant
@@ -285,6 +297,36 @@ open class LocalModelManager @Inject constructor(
     // antes de qualquer exceção chegar ao Kotlin. O marcador em disco transforma esse
     // desaparecimento silencioso num resultado observável na próxima inicialização.
 
+    /**
+     * Persiste a tentativa em `model_load_log` — inclusive as que falharam.
+     *
+     * As condições do aparelho (RAM total e disponível) vão junto de propósito: sem
+     * elas, um `FAILED` no Device 2 é só uma string, e não a evidência de que 3,43 GB de
+     * pesos não cabiam nos ~3,6 GB reportados naquele momento.
+     */
+    private suspend fun persist(attempt: LocalModelLoadAttempt, capability: DeviceCapability) {
+        val info = (localInferenceService as? LlamaCppLocalInferenceService)?.modelInfo
+        routingLogger.logModelLoad(
+            ModelLoadLogEntry(
+                deviceId = deviceProfileProvider.deviceId(),
+                modelId = attempt.variant.label,
+                modelSizeBytes = attempt.modelSizeBytes,
+                loadMs = attempt.loadMs,
+                warmupMs = attempt.warmupMs,
+                outcome = attempt.outcome.name,
+                reason = attempt.reason,
+                runtime = RUNTIME,
+                abi = Build.SUPPORTED_ABIS.firstOrNull().orEmpty(),
+                threads = if (attempt.outcome == LoadOutcome.SUCCESS) config.threads else -1,
+                contextSize = info?.contextSize ?: -1,
+                backends = info?.backends,
+                vulkanEnabled = info?.backends?.contains("Vulkan", ignoreCase = true) == true,
+                totalRamMb = capability.totalRamMb,
+                availableRamMb = capability.availableRamMb
+            )
+        )
+    }
+
     private fun elapsedMs(startNs: Long): Long = (System.nanoTime() - startNs) / 1_000_000
 
     private val crashMarker: File get() = File(context.filesDir, CRASH_MARKER_NAME)
@@ -313,6 +355,7 @@ open class LocalModelManager @Inject constructor(
     companion object {
         private const val TAG = "LocalModelManager"
         private const val CRASH_MARKER_NAME = ".model_load_in_progress"
+        private const val RUNTIME = "llamacpp"
 
         /** Subpasta de `getExternalFilesDir` onde o `adb push` deposita os GGUF. */
         const val EXTERNAL_MODELS_DIR = "models"

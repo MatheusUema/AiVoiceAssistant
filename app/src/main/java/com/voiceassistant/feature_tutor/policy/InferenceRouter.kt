@@ -10,6 +10,7 @@ import com.voiceassistant.ai_server.model.ServerConfig
 import com.voiceassistant.ai_server.service.ServerInferenceService
 import com.voiceassistant.ai_server.service.ServerResult
 import com.voiceassistant.ai_server.service.ServerUnavailableException
+import com.voiceassistant.core.device.DeviceProfileProvider
 import com.voiceassistant.core.logging.RoutingLogger
 import com.voiceassistant.core.model.InferenceRequest
 import com.voiceassistant.core.model.InferenceResult
@@ -67,6 +68,7 @@ class InferenceRouter @Inject constructor(
     private val userSettingsDataStore: UserSettingsDataStore,
     private val promptBuilder: TutorPromptBuilder,
     private val routingLogger: RoutingLogger,
+    private val deviceProfileProvider: DeviceProfileProvider,
     private val ramSampler: ProcessRamSampler = ProcessRamSampler()
 ) : InferenceRepository {
 
@@ -150,7 +152,9 @@ class InferenceRouter @Inject constructor(
                 mode = request.tutorMode,
                 latencyMs = result.latencyMs,
                 modelId = modelIdFor(result.source, serverBaseUrl),
-                connectivity = connectivity
+                connectivity = connectivity,
+                deviceId = deviceProfileProvider.deviceId(),
+                telemetry = result.telemetry
             )
         } catch (e: Exception) {
             Log.w(TAG, "Falha ao registrar log de roteamento: ${e.message}")

@@ -73,6 +73,12 @@ android {
         unitTests.isReturnDefaultValues = true
     }
 
+    // O MigrationTestHelper lê os schemas exportados como assets do APK de teste.
+    // Sem isto, o teste de migração não encontra o schema da versão de origem.
+    sourceSets.getByName("androidTest") {
+        assets.srcDirs("$projectDir/schemas")
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -146,6 +152,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.room.testing)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.ui.test.junit4)
