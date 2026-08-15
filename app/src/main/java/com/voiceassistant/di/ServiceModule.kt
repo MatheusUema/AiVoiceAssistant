@@ -58,7 +58,8 @@ abstract class ServiceModule {
             primary = LocalModelConfig.variantOf(BuildConfig.LOCAL_MODEL),
             fallback = BuildConfig.LOCAL_MODEL_FALLBACK
                 .takeUnless { it.equals("none", ignoreCase = true) }
-                ?.let { LocalModelConfig.variantOf(it) }
+                ?.let { LocalModelConfig.variantOf(it) },
+            maxTokens = BuildConfig.LOCAL_MAX_TOKENS
         )
 
         @Provides

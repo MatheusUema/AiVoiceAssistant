@@ -111,6 +111,14 @@ class LlamaCppLocalInferenceService @Inject constructor(
     val systemInfo: String?
         get() = engine.systemInfo
 
+    /**
+     * Threads de inferência **resolvidas** (a heurística já aplicada), não o valor pedido
+     * na config. Registrar o pedido (`0` = "decida por mim") em vez do efetivo tornaria o
+     * `model_load_log` inútil para explicar diferenças de desempenho entre aparelhos.
+     */
+    val threads: Int
+        get() = engine.threads
+
     override suspend fun loadModel(modelPath: String) {
         if (engine.isLoaded) {
             Log.d(TAG, "Modelo já carregado, ignorando loadModel()")
@@ -124,7 +132,12 @@ class LlamaCppLocalInferenceService @Inject constructor(
         when (result) {
             is LlamaLoadResult.Success -> {
                 // Do nome do arquivo, não da config: se o fallback assumiu, é este o modelo.
-                loadedModelId = modelPath.substringAfterLast('/').substringBeforeLast('.')
+                // Em minúsculas para casar com `LocalModelVariant.label`, que é o que a
+                // `model_load_log` grava — sem isso as duas tabelas não fazem join por
+                // modelo (`gemma-4-E2B-it-Q4_K_M` vs `gemma-4-e2b-it-q4_k_m`).
+                loadedModelId = modelPath.substringAfterLast('/')
+                    .substringBeforeLast('.')
+                    .lowercase()
                 Log.i(
                     TAG,
                     "Modelo carregado em ${result.loadMs}ms — ${result.info.description}, " +

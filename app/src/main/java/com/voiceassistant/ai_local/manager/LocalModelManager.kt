@@ -305,7 +305,8 @@ open class LocalModelManager @Inject constructor(
      * pesos não cabiam nos ~3,6 GB reportados naquele momento.
      */
     private suspend fun persist(attempt: LocalModelLoadAttempt, capability: DeviceCapability) {
-        val info = (localInferenceService as? LlamaCppLocalInferenceService)?.modelInfo
+        val llama = localInferenceService as? LlamaCppLocalInferenceService
+        val info = llama?.modelInfo
         routingLogger.logModelLoad(
             ModelLoadLogEntry(
                 deviceId = deviceProfileProvider.deviceId(),
@@ -317,9 +318,17 @@ open class LocalModelManager @Inject constructor(
                 reason = attempt.reason,
                 runtime = RUNTIME,
                 abi = Build.SUPPORTED_ABIS.firstOrNull().orEmpty(),
-                threads = if (attempt.outcome == LoadOutcome.SUCCESS) config.threads else -1,
+                // As threads efetivas, não o `config.threads` — que vale 0 quando se pede
+                // a heurística, e gravar 0 tornaria a coluna inútil justamente para
+                // explicar diferenças de desempenho entre aparelhos.
+                threads = if (attempt.outcome == LoadOutcome.SUCCESS) llama?.threads ?: -1 else -1,
                 contextSize = info?.contextSize ?: -1,
-                backends = info?.backends,
+                // As features de CPU escolhidas em runtime entram junto dos backends:
+                // dois aparelhos podem rodar kernels diferentes, e sem isso a comparação
+                // entre eles ficaria sem explicação.
+                backends = listOfNotNull(info?.backends, llama?.systemInfo)
+                    .joinToString(" | ")
+                    .takeIf { it.isNotBlank() },
                 vulkanEnabled = info?.backends?.contains("Vulkan", ignoreCase = true) == true,
                 totalRamMb = capability.totalRamMb,
                 availableRamMb = capability.availableRamMb
