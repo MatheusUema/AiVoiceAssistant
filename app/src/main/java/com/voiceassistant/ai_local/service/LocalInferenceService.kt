@@ -1,5 +1,7 @@
 package com.voiceassistant.ai_local.service
 
+import com.voiceassistant.core.model.InferenceTelemetry
+
 /**
  * Contrato de domínio para inferência LLM local (on-device).
  *
@@ -51,6 +53,26 @@ interface LocalInferenceService {
 
     /** Libera os pesos do modelo da memória. Seguro chamar múltiplas vezes. */
     fun unloadModel()
+
+    /**
+     * Identificador do modelo **efetivamente carregado**.
+     *
+     * Não é o mesmo que o modelo configurado: quando o primário não cabe no aparelho e o
+     * fallback assume (o caso do Device 2), é este valor que diz a verdade sobre quem
+     * respondeu. O `routing_log` precisa dele, senão registra o modelo errado justamente
+     * no cenário que o estudo quer medir.
+     *
+     * Null quando nada está carregado. Default null para implementações que não rastreiam.
+     */
+    val loadedModelId: String?
+        get() = null
+
+    /**
+     * Métricas de hardware da última chamada a [generate] (H2–H4).
+     * Null para runtimes que não instrumentam.
+     */
+    val lastTelemetry: InferenceTelemetry?
+        get() = null
 }
 
 /** O modelo não foi carregado ou o carregamento falhou. */

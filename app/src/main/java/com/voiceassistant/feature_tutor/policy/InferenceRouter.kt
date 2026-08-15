@@ -17,6 +17,7 @@ import com.voiceassistant.core.model.InferenceSource
 import com.voiceassistant.core.model.PromptComplexity
 import com.voiceassistant.core.network.NetworkMonitor
 import com.voiceassistant.core.storage.UserSettingsDataStore
+import com.voiceassistant.core.telemetry.ProcessRamSampler
 import com.voiceassistant.domain.repository.InferenceRepository
 import com.voiceassistant.feature_tutor.prompt.TutorPromptBuilder
 import kotlinx.coroutines.flow.first
@@ -65,7 +66,8 @@ class InferenceRouter @Inject constructor(
     private val networkMonitor: NetworkMonitor,
     private val userSettingsDataStore: UserSettingsDataStore,
     private val promptBuilder: TutorPromptBuilder,
-    private val routingLogger: RoutingLogger
+    private val routingLogger: RoutingLogger,
+    private val ramSampler: ProcessRamSampler = ProcessRamSampler()
 ) : InferenceRepository {
 
     override suspend fun infer(request: InferenceRequest): InferenceResult {
@@ -161,7 +163,11 @@ class InferenceRouter @Inject constructor(
      * do modelo servido não é exposto pela app; registre-o à parte (ver docs/05).
      */
     private fun modelIdFor(source: InferenceSource, serverBaseUrl: String): String = when (source) {
-        InferenceSource.LOCAL -> localModelConfig.modelFileName
+        // O modelo **carregado**, não o configurado: quando o primário não cabe e o
+        // fallback assume (Device 2), registrar o configurado seria mentir sobre quem
+        // respondeu — bem no caso que o estudo quer medir. Cai na config só se o
+        // runtime não souber dizer.
+        InferenceSource.LOCAL -> localService.loadedModelId ?: localModelConfig.modelFileName
         InferenceSource.SERVER -> "llama-server@$serverBaseUrl"
         InferenceSource.CLOUD -> cloudModelConfig.modelName
         // FALLBACK é ambíguo (servidor ou cloud, após falha do tier primário).
@@ -252,10 +258,29 @@ class InferenceRouter @Inject constructor(
 
     private suspend fun runLocal(prompt: String): InferenceResult {
         val start = System.currentTimeMillis()
-        val raw = localService.generate(prompt)
+        // O pico de RAM (H4) tem que ser amostrado *durante* a geração: os buffers de
+        // compute nascem e morrem ao longo do decode, então ler no fim perderia o pico.
+        val (raw, peakRamMb) = ramSampler.measurePeak { localService.generate(prompt) }
         val latency = System.currentTimeMillis() - start
-        Log.i(TAG, "LOCAL concluído em ${latency}ms")
-        return InferenceResult(text = cleanResponse(raw), source = InferenceSource.LOCAL, latencyMs = latency)
+
+        val telemetry = localService.lastTelemetry?.copy(peakProcessRamMb = peakRamMb)
+
+        Log.i(
+            TAG,
+            "LOCAL concluído em ${latency}ms" + (telemetry?.let {
+                " | ${it.promptTokens}→${it.generatedTokens} tok, " +
+                        "TTFT ${it.ttftMs.toInt()}ms, " +
+                        "${"%.1f".format(it.generatedTokensPerSec)} tok/s, " +
+                        "pico RAM ${it.peakProcessRamMb}MB"
+            } ?: "")
+        )
+
+        return InferenceResult(
+            text = cleanResponse(raw),
+            source = InferenceSource.LOCAL,
+            latencyMs = latency,
+            telemetry = telemetry
+        )
     }
 
     private suspend fun runCloud(prompt: String): InferenceResult {

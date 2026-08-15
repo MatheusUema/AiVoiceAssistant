@@ -232,7 +232,7 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeLastError(JNIEnv * env, jobject 
 JNIEXPORT jlong JNICALL
 Java_com_voiceassistant_llama_LlamaBridge_nativeLoadModel(
         JNIEnv * env, jobject /*thiz*/,
-        jstring jpath, jint n_ctx, jint n_threads, jint n_batch) {
+        jstring jpath, jint n_ctx, jint n_threads, jint n_batch, jboolean flash_attn) {
     clear_error();
 
     const std::string path = jstring_to_std(env, jpath);
@@ -275,6 +275,12 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeLoadModel(
     // Default do llama.cpp é no_perf=true (timings desligados). Sem isto,
     // llama_perf_context devolve t_p_eval_ms/t_eval_ms zerados e H2/H3 morrem.
     ctx_params.no_perf         = false;
+    // Flash Attention explícito, nunca AUTO: no modo automático o llama.cpp decide em
+    // runtime, e uma decisão diferente entre aparelhos ou execuções quebraria a
+    // comparabilidade que o protocolo de medição exige (doc 04 §8).
+    ctx_params.flash_attn_type = flash_attn
+        ? LLAMA_FLASH_ATTN_TYPE_ENABLED
+        : LLAMA_FLASH_ATTN_TYPE_DISABLED;
 
     s->ctx = llama_init_from_model(s->model, ctx_params);
     if (s->ctx == nullptr) {
@@ -292,7 +298,8 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeLoadModel(
     s->n_ctx       = n_ctx_eff;
     s->n_threads   = threads;
 
-    LOGi("modelo pronto (n_ctx=%d, n_batch=%d, threads=%d)", n_ctx_eff, batch, threads);
+    LOGi("modelo pronto (n_ctx=%d, n_batch=%d, threads=%d, flash_attn=%s)",
+         n_ctx_eff, batch, threads, flash_attn ? "on" : "off");
     return reinterpret_cast<jlong>(s);
 }
 
@@ -362,6 +369,12 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeGenerate(
 
     const double t_start = now_ms();
 
+    // Fecha qualquer decode pendente da chamada anterior ANTES de zerar os contadores.
+    // O llama.cpp contabiliza de forma preguiçosa, dentro do synchronize(): se a geração
+    // anterior terminou logo após um decode (fim por EOG ou por teto de tokens), sobra uma
+    // janela aberta que seria atribuída ao prefill desta chamada — foi o que fez o
+    // prefill medido sair MAIOR que o TTFT.
+    llama_synchronize(s->ctx);
     llama_memory_clear(llama_get_memory(s->ctx), true);
     llama_perf_context_reset(s->ctx);
 
@@ -449,6 +462,10 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeGenerate(
     }
 
     common_sampler_free(sampler);
+
+    // Fecha a janela do último decode antes de ler os contadores; sem isto o tempo do
+    // token final ficaria de fora (e vazaria para a próxima chamada).
+    llama_synchronize(s->ctx);
 
     if (failed && out.empty()) {
         return nullptr;
