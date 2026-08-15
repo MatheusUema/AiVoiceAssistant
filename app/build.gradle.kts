@@ -84,6 +84,12 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
             excludes += "/META-INF/DEPENDENCIES"
         }
+        jniLibs {
+            // O empacotamento do APK final é decidido aqui, não no módulo :llama.
+            // Precisa ser legacy (extrair na instalação) porque o ggml faz `dlopen` das
+            // variantes de CPU por caminho absoluto — ver comentário em :llama.
+            useLegacyPackaging = true
+        }
     }
 
     // Não comprimir modelos LLM — llama.cpp usa mmap sobre o arquivo, sem descompressão

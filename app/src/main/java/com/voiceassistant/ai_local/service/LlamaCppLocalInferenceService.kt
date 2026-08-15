@@ -1,5 +1,6 @@
 package com.voiceassistant.ai_local.service
 
+import android.content.Context
 import android.util.Log
 import com.voiceassistant.ai_local.model.LocalModelConfig
 import com.voiceassistant.core.model.InferenceTelemetry
@@ -10,6 +11,7 @@ import com.voiceassistant.llama.LlamaModelInfo
 import com.voiceassistant.llama.LlamaParams
 import com.voiceassistant.llama.LlamaStats
 import com.voiceassistant.llama.LlamaStopReason
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -30,10 +32,15 @@ import javax.inject.Singleton
  */
 @Singleton
 class LlamaCppLocalInferenceService @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val config: LocalModelConfig
 ) : LocalInferenceService {
 
-    private val engine = LlamaEngine()
+    // O diretório de libs nativas é de onde o ggml carrega as variantes de CPU e escolhe
+    // a melhor suportada pelo aparelho.
+    // `?.` porque em teste de unidade na JVM o applicationInfo vem nulo; ali o runtime
+    // nativo não existe mesmo, e o caminho vazio leva ao fallback de carga de backends.
+    private val engine = LlamaEngine(context.applicationInfo?.nativeLibraryDir.orEmpty())
 
     private val params: LlamaParams
         get() = LlamaParams(
@@ -99,6 +106,10 @@ class LlamaCppLocalInferenceService @Inject constructor(
     /** Ficha do modelo carregado (descrição, tamanho, n_ctx efetivo, backends ggml). */
     val modelInfo: LlamaModelInfo?
         get() = engine.modelInfo
+
+    /** Features de CPU escolhidas em runtime — vai para o `model_load_log`. */
+    val systemInfo: String?
+        get() = engine.systemInfo
 
     override suspend fun loadModel(modelPath: String) {
         if (engine.isLoaded) {

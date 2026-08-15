@@ -19,7 +19,8 @@ import org.junit.Test
  */
 class LlamaCppLocalInferenceServiceContractTest {
 
-    private fun service() = LlamaCppLocalInferenceService(LocalModelConfig())
+    private fun service() =
+        LlamaCppLocalInferenceService(android.app.Application(), LocalModelConfig())
 
     @Test
     fun `sem modelo carregado, nao esta disponivel`() {
