@@ -12,6 +12,11 @@ import com.voiceassistant.ai_server.model.ServerConfig
 import com.voiceassistant.ai_server.service.ServerInferenceService
 import com.voiceassistant.ai_server.service.ServerResult
 import com.voiceassistant.ai_server.service.ServerUnavailableException
+import com.voiceassistant.core.device.DeviceProfileProvider
+import com.voiceassistant.core.logging.DeviceProfileDao
+import com.voiceassistant.core.logging.DeviceProfileEntry
+import com.voiceassistant.core.logging.ModelLoadLogDao
+import com.voiceassistant.core.logging.ModelLoadLogEntry
 import com.voiceassistant.core.logging.RoutingLogDao
 import com.voiceassistant.core.logging.RoutingLogEntry
 import com.voiceassistant.core.logging.RoutingLogger
@@ -380,7 +385,8 @@ class InferenceRouterExecutionTest {
             networkMonitor = FakeNetworkMonitor(ctx, online),
             userSettingsDataStore = FakeUserSettingsDataStore(ctx, effectiveSettings),
             promptBuilder = TutorPromptBuilder(),
-            routingLogger = RoutingLogger(fakeLogDao)
+            routingLogger = fakeLogger(fakeLogDao),
+            deviceProfileProvider = DeviceProfileProvider(ctx, FakeDeviceProfileDao())
         )
     }
 
@@ -705,7 +711,7 @@ class RoutingLoggerCsvTest {
     @Test
     fun `exportCsv writes header and one row per entry`() = runTest {
         val dao = FakeRoutingLogDao()
-        val logger = RoutingLogger(dao)
+        val logger = fakeLogger(dao)
         logger.log(
             sessionId = "s1",
             questionText = "O que é fotossíntese?",
@@ -722,18 +728,24 @@ class RoutingLoggerCsvTest {
 
         val lines = logger.exportCsv().lines()
         assertEquals(
-            "timestamp,session_id,question,complexity,route,confidence,method," +
-                "tier,mode,latency_ms,model,connectivity",
+            "timestamp,session_id,device_id,question,complexity,route,confidence,method," +
+                "tier,mode,latency_ms,model,connectivity,runtime,prompt_tokens," +
+                "generated_tokens,reasoning_tokens,ttft_ms,ingestion_ms,generation_ms," +
+                "tokens_per_sec,peak_ram_mb,threads,backends,stop_reason,truncated," +
+                "block_id,run_index",
             lines.first()
         )
         assertEquals(2, lines.size)
         assertTrue(lines[1].contains(",SERVER,0.8,logprobs_mean,SERVER,EXPLAIN,123,"))
+        // Sem telemetria, as colunas de hardware saem como -1 (indisponível) e não 0:
+        // a análise não pode confundir "não medido" com "custou zero".
+        assertTrue("esperava -1 nas colunas de hardware", lines[1].contains(",-1,-1,-1,"))
     }
 
     @Test
     fun `exportCsv escapes quotes and neutralizes commas inside fields`() = runTest {
         val dao = FakeRoutingLogDao()
-        val logger = RoutingLogger(dao)
+        val logger = fakeLogger(dao)
         logger.log(
             sessionId = "s1",
             questionText = "Diga \"olá\", por favor",
@@ -792,6 +804,28 @@ private class FakeRoutingLogDao : RoutingLogDao {
     override suspend fun clear() { entries.clear() }
 }
 
+private class FakeModelLoadLogDao : ModelLoadLogDao {
+    val entries = mutableListOf<ModelLoadLogEntry>()
+    override suspend fun insert(entry: ModelLoadLogEntry) { entries.add(entry) }
+    override suspend fun getAll(): List<ModelLoadLogEntry> = entries.toList()
+    override suspend fun count(): Int = entries.size
+    override suspend fun clear() { entries.clear() }
+}
+
+private class FakeDeviceProfileDao : DeviceProfileDao {
+    val entries = mutableMapOf<String, DeviceProfileEntry>()
+    override suspend fun upsert(entry: DeviceProfileEntry) { entries[entry.deviceId] = entry }
+    override suspend fun getAll(): List<DeviceProfileEntry> = entries.values.toList()
+    override suspend fun get(deviceId: String): DeviceProfileEntry? = entries[deviceId]
+    override suspend fun annotate(deviceId: String, label: String, notes: String?) {
+        entries[deviceId]?.let { entries[deviceId] = it.copy(label = label, notes = notes) }
+    }
+}
+
+/** Logger com os três DAOs falsos — o construtor real exige os três. */
+private fun fakeLogger(dao: RoutingLogDao = FakeRoutingLogDao()) =
+    RoutingLogger(dao, FakeModelLoadLogDao(), FakeDeviceProfileDao())
+
 private class FakeServerInferenceService : ServerInferenceService(ServerConfig()) {
     var reachable: Boolean = true
     var generateResult: String = "resposta servidor"
@@ -821,7 +855,9 @@ private class FakeLocalModelManager(
     context = ctx,
     localInferenceService = FakeLocalInferenceService(),
     deviceCapabilityChecker = DeviceCapabilityChecker(ctx, LocalModelConfig()),
-    config = LocalModelConfig()
+    config = LocalModelConfig(),
+    routingLogger = fakeLogger(),
+    deviceProfileProvider = DeviceProfileProvider(ctx, FakeDeviceProfileDao())
 ) {
     override val isAvailable: Boolean get() = available
 }
