@@ -256,11 +256,21 @@ class InferenceRouter @Inject constructor(
         )
     }
 
-    private suspend fun runLocal(prompt: String): InferenceResult {
+    /**
+     * @param hasFallback true quando existe outro tier para onde escalar. Encurta o
+     *   orçamento de tempo do local: com alternativa disponível, esperar o timeout
+     *   longo e só então chamar a nuvem soma as latências e piora a resposta.
+     */
+    private suspend fun runLocal(prompt: String, hasFallback: Boolean = false): InferenceResult {
         val start = System.currentTimeMillis()
+        val budgetMs = if (hasFallback) {
+            localModelConfig.generationTimeoutWithFallbackMs
+        } else {
+            localModelConfig.generationTimeoutMs
+        }
         // O pico de RAM (H4) tem que ser amostrado *durante* a geração: os buffers de
         // compute nascem e morrem ao longo do decode, então ler no fim perderia o pico.
-        val (raw, peakRamMb) = ramSampler.measurePeak { localService.generate(prompt) }
+        val (raw, peakRamMb) = ramSampler.measurePeak { localService.generate(prompt, budgetMs) }
         val latency = System.currentTimeMillis() - start
 
         val telemetry = localService.lastTelemetry?.copy(peakProcessRamMb = peakRamMb)
@@ -293,7 +303,7 @@ class InferenceRouter @Inject constructor(
 
     private suspend fun runLocalWithCloudFallback(prompt: String): InferenceResult {
         return try {
-            runLocal(prompt)
+            runLocal(prompt, hasFallback = true)
         } catch (localError: Exception) {
             Log.w(TAG, "FALLBACK: local falhou (${localError.message}), tentando cloud")
             try {
@@ -364,7 +374,8 @@ class InferenceRouter @Inject constructor(
     private suspend fun runServerFallback(prompt: String): InferenceResult {
         if (localModelManager.isAvailable) {
             // Marca como FALLBACK (não LOCAL): o tier primário (servidor) falhou.
-            runCatching { return runLocal(prompt).copy(source = InferenceSource.FALLBACK) }
+            runCatching { return runLocal(prompt, hasFallback = cloudService.isAvailable)
+                .copy(source = InferenceSource.FALLBACK) }
                 .onFailure { Log.w(TAG, "Fallback local falhou: ${it.message}") }
         }
         if (cloudService.isAvailable) {
@@ -381,7 +392,7 @@ class InferenceRouter @Inject constructor(
 
     private suspend fun runLocalWithServerFallback(prompt: String): InferenceResult {
         return try {
-            runLocal(prompt)
+            runLocal(prompt, hasFallback = true)
         } catch (localError: Exception) {
             Log.w(TAG, "FALLBACK: local falhou (${localError.message}), tentando servidor")
             try {

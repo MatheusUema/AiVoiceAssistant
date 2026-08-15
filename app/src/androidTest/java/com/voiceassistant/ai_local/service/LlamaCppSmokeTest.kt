@@ -7,6 +7,7 @@ import com.voiceassistant.ai_local.model.LocalModelConfig
 import com.voiceassistant.ai_local.model.LocalModelVariant
 import com.voiceassistant.core.telemetry.ProcessRamSampler
 import com.voiceassistant.llama.LlamaEngine
+import com.voiceassistant.llama.LlamaStopReason
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -73,7 +74,10 @@ class LlamaCppSmokeTest {
                 minRamMb = 0
             ),
             fallback = null,
-            maxTokens = 64
+            // Folgado de propósito: com teto curto, um modelo que raciocina (Gemma 4)
+            // é cortado no meio do pensamento e o teste mede truncamento em vez de
+            // geração — inclusive impedindo verificar a separação raciocínio/resposta.
+            maxTokens = 768
         )
         val service = LlamaCppLocalInferenceService(config)
 
@@ -172,6 +176,80 @@ class LlamaCppSmokeTest {
             service.unloadModel()
         }
     }
+
+    /**
+     * O timeout precisa **interromper** a geração, não apenas abandonar a corrotina: a
+     * chamada JNI é bloqueante e continuaria queimando CPU e segurando a thread de
+     * inferência, o que travaria a próxima pergunta da bateria.
+     *
+     * Verifica as duas coisas que importam: o erro certo chega à camada de domínio, e
+     * o tempo gasto fica perto do limite em vez do tempo da geração completa.
+     */
+    @Test
+    fun timeoutInterrompeAGeracaoEmVezDeEsperar() = runBlocking {
+        assumeTrue("libllama_bridge.so não disponível", LlamaEngine.isNativeAvailable)
+
+        val model = findModel()
+        assumeTrue("Nenhum GGUF no aparelho — teste pulado", model != null)
+
+        val timeoutMs = 1_500L
+        val service = LlamaCppLocalInferenceService(
+            LocalModelConfig(
+                primary = variantFor(model!!),
+                fallback = null,
+                maxTokens = 768,
+                generationTimeoutMs = timeoutMs
+            )
+        )
+
+        try {
+            service.loadModel(model.absolutePath)
+
+            val elapsed: Long
+            try {
+                val start = System.currentTimeMillis()
+                service.generate("Escreva uma redação longa e detalhada sobre a Amazônia.")
+                elapsed = System.currentTimeMillis() - start
+                error("deveria ter lançado LocalInferenceTimeoutException após ${elapsed}ms")
+            } catch (expected: LocalInferenceTimeoutException) {
+                Log.i(TAG, "timeout como esperado: ${expected.message}")
+            }
+
+            val stats = service.lastStats
+            assertNotNull("telemetria do timeout ausente", stats)
+            assertEquals(
+                "motivo de parada deve ser TIMEOUT",
+                LlamaStopReason.TIMEOUT, stats!!.stopReason
+            )
+            // Folga generosa: o cancelamento só é observado entre tokens, e um decode
+            // em andamento chega a segundos nos aparelhos lentos.
+            assertTrue(
+                "geração levou ${stats.totalMs}ms para um timeout de ${timeoutMs}ms — " +
+                        "o cancelamento não interrompeu de fato",
+                stats.totalMs < timeoutMs * 4
+            )
+        } finally {
+            service.unloadModel()
+        }
+    }
+
+    private fun findModel(): java.io.File? {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val searchDirs = listOfNotNull(
+            context.filesDir,
+            context.getExternalFilesDir(LocalModelManager.EXTERNAL_MODELS_DIR)
+        )
+        return variants
+            .flatMap { variant -> searchDirs.map { java.io.File(it, variant.fileName) } }
+            .filter { it.exists() && it.length() > 0 }
+            .minByOrNull { it.length() }
+    }
+
+    private fun variantFor(model: java.io.File) = LocalModelVariant(
+        assetPath = "models/${model.name}",
+        sizeMb = model.length() / (1024 * 1024),
+        minRamMb = 0
+    )
 
     companion object {
         private const val TAG = "LlamaCppSmokeTest"

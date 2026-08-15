@@ -1,7 +1,11 @@
 package com.voiceassistant.llama
 
 import android.util.Log
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.Executors
@@ -110,10 +114,34 @@ class LlamaEngine {
      * @throws LlamaGenerationException se a geração falhar no lado nativo.
      */
     suspend fun generate(prompt: String, params: LlamaParams): LlamaGeneration =
-        withContext(dispatcher) {
+        coroutineScope {
             val current = handle
             check(current != 0L) { "Nenhum modelo carregado" }
 
+            // Watchdog fora do dispatcher de inferência: aquele thread fica bloqueado
+            // dentro do JNI durante toda a geração e não poderia se auto-interromper.
+            // O cancelamento é cooperativo — o laço nativo checa a flag por token.
+            val watchdog = if (params.generationTimeoutMs > 0) {
+                launch(Dispatchers.Default) {
+                    delay(params.generationTimeoutMs)
+                    Log.w(TAG, "Timeout de ${params.generationTimeoutMs}ms; cancelando a geração")
+                    LlamaBridge.nativeRequestCancel(current)
+                }
+            } else null
+
+            try {
+                generateBlocking(current, prompt, params)
+            } finally {
+                watchdog?.cancel()
+            }
+        }
+
+    private suspend fun generateBlocking(
+        current: Long,
+        prompt: String,
+        params: LlamaParams
+    ): LlamaGeneration =
+        withContext(dispatcher) {
             val text = LlamaBridge.nativeGenerate(
                 current,
                 prompt,
@@ -121,12 +149,17 @@ class LlamaEngine {
                 params.temperature,
                 params.topK,
                 params.topP,
-                params.seed
+                params.seed,
+                params.enableThinking
             ) ?: throw LlamaGenerationException(
                 LlamaBridge.nativeLastError().ifBlank { "geração falhou sem mensagem" }
             )
 
-            LlamaGeneration(text, LlamaStats.fromArray(LlamaBridge.nativeLastStats(current)))
+            LlamaGeneration(
+                text = text,
+                stats = LlamaStats.fromArray(LlamaBridge.nativeLastStats(current)),
+                reasoning = LlamaBridge.nativeLastReasoning(current)
+            )
         }
 
     /** Número de tokens de [text] segundo o tokenizador do modelo carregado, ou -1. */

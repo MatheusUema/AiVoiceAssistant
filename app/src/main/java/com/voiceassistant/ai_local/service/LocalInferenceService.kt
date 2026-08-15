@@ -24,6 +24,18 @@ interface LocalInferenceService {
      */
     suspend fun generate(prompt: String): String
 
+    /**
+     * Igual a [generate], mas com um orçamento de tempo próprio para esta chamada.
+     *
+     * Existe porque o tempo aceitável depende de haver alternativa: quando o roteador
+     * tem nuvem ou servidor para escalar, esperar minutos pelo local é pior do que
+     * desistir cedo — as latências somam. Sem alternativa (offline, modo privacidade),
+     * vale esperar, porque a opção é não responder.
+     *
+     * O default ignora o orçamento e delega, para runtimes que não sabem se interromper.
+     */
+    suspend fun generate(prompt: String, timeoutMs: Long): String = generate(prompt)
+
     /** True se o modelo está carregado e pronto para [generate]. */
     val isModelLoaded: Boolean
 
@@ -81,7 +93,22 @@ class LocalModelNotReadyException(
 ) : Exception(message)
 
 /** Erro durante carregamento ou geração no modelo local. */
-class LocalInferenceException(
+open class LocalInferenceException(
     message: String,
     cause: Throwable? = null
 ) : Exception(message, cause)
+
+/**
+ * A geração local passou do tempo aceitável e foi interrompida.
+ *
+ * No estudo isto é um **resultado**: o aparelho não sustenta aquele modelo em uso real.
+ * Para o aluno é um erro — melhor uma mensagem clara do que uma espera indefinida ou o
+ * monólogo interno do modelo na tela.
+ */
+class LocalInferenceTimeoutException(
+    val elapsedMs: Long,
+    val generatedTokens: Int
+) : LocalInferenceException(
+    "O modelo local demorou demais para responder (${elapsedMs / 1000}s, " +
+            "$generatedTokens tokens gerados). Este aparelho pode não dar conta deste modelo."
+)
