@@ -5,17 +5,38 @@ O runtime local é o llama.cpp (módulo `:llama`). Formato **GGUF**, quantizaç�
 
 Os pesos **não** são versionados no git.
 
-| Papel | Arquivo | Tamanho | Onde é usado |
+| Chave de build | Arquivo | Tamanho | Papel |
 |---|---|---|---|
-| Primário | `gemma-4-E2B-it-Q4_K_M.gguf` | 3,43 GB | os 3 aparelhos do estudo |
-| Fallback | `gemma-3-1b-it-Q4_K_M.gguf` | ~0,8 GB | só quando o primário não carrega (Device 2, 4 GB) |
-| Smoke test | `qwen2.5-0.5b-instruct-q4_k_m.gguf` | ~400 MB | validar a ponte JNI sem depender de RAM |
+| `gemma4-e2b` | `gemma-4-E2B-it-Q4_K_M.gguf` | 3,43 GB | **bateria 1** — modelo oficial, os 3 aparelhos |
+| `qwen-1.5b` | `qwen2.5-1.5b-instruct-q4_k_m.gguf` | ~1,1 GB | **bateria 2** — segundo modelo da matriz |
+| `gemma3-1b` | `gemma-3-1b-it-Q4_K_M.gguf` | ~0,8 GB | fallback do Gemma quando o E2B não carrega (Device 2) |
+| `qwen-0.5b` | `qwen2.5-0.5b-instruct-q4_k_m.gguf` | ~470 MB | opção leve do Qwen; também é o smoke test da ponte JNI |
 
 Fonte do primário: [`lmstudio-community/gemma-4-E2B-it-GGUF`](https://huggingface.co/lmstudio-community/gemma-4-E2B-it-GGUF)
 (5B parâmetros totais / 2B efetivos). O `mmproj-*.gguf` de visão **não** é necessário.
 
-Os nomes vêm de `LocalModelConfig` (`GEMMA_4_E2B_Q4_K_M`, `GEMMA_3_1B_Q4_K_M`,
-`SMOKE_TEST_TINY`). Se o arquivo baixado tiver outro nome, ajuste lá — ou renomeie.
+## Trocar o modelo ativo (matriz sequencial)
+
+A matriz de testes roda **uma bateria completa por modelo**, nunca os dois ao mesmo tempo.
+Trocar de bateria é recompilar com outra chave — não se edita Kotlin entre rodadas:
+
+```bash
+./gradlew :app:assembleDebug -Plocal.model=gemma4-e2b   # bateria 1 (default)
+./gradlew :app:assembleDebug -Plocal.model=qwen-1.5b    # bateria 2
+```
+
+Chaves em `LocalModelConfig.CATALOG`: `gemma4-e2b`, `gemma3-1b`, `qwen-1.5b`, `qwen-0.5b`.
+O fallback sai em `-Plocal.model.fallback` (`none` desliga). Exemplos:
+
+```bash
+# só o E2B, sem rede de segurança — para medir a falha de carga no Device 2
+./gradlew :app:assembleDebug -Plocal.model=gemma4-e2b -Plocal.model.fallback=none
+
+# bateria do Qwen, com o 0.5B de reserva
+./gradlew :app:assembleDebug -Plocal.model=qwen-1.5b -Plocal.model.fallback=qwen-0.5b
+```
+
+Se o arquivo baixado tiver outro nome, renomeie ou ajuste a variante em `LocalModelConfig`.
 
 ## Como colocar o modelo no aparelho
 

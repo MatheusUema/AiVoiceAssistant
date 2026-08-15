@@ -8,6 +8,16 @@ plugins {
     alias(libs.plugins.google.services)
 }
 
+// Modelo local ativo. A matriz de testes é SEQUENCIAL (uma bateria completa por modelo),
+// então trocar de bateria é trocar esta propriedade — nada de editar Kotlin entre rodadas:
+//   ./gradlew :app:assembleDebug -Plocal.model=qwen-1.5b
+// Chaves válidas em LocalModelConfig.CATALOG: gemma4-e2b, gemma3-1b, qwen-1.5b, qwen-0.5b.
+// O fallback (usado só quando o primário não carrega) sai em -Plocal.model.fallback;
+// "none" desliga o fallback.
+val localModel: String = providers.gradleProperty("local.model").getOrElse("gemma4-e2b")
+val localModelFallback: String =
+    providers.gradleProperty("local.model.fallback").getOrElse("gemma3-1b")
+
 android {
     namespace = "com.voiceassistant"
     compileSdk = 35
@@ -25,6 +35,9 @@ android {
         ksp {
             arg("room.schemaLocation", "$projectDir/schemas")
         }
+
+        buildConfigField("String", "LOCAL_MODEL", "\"$localModel\"")
+        buildConfigField("String", "LOCAL_MODEL_FALLBACK", "\"$localModelFallback\"")
     }
 
     buildTypes {
