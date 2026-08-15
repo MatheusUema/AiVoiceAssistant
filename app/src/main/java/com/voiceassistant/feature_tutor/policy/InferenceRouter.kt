@@ -101,12 +101,18 @@ class InferenceRouter @Inject constructor(
         )
 
         val isCompact = decision.usesCompactPrompt
-        val builtPrompt = promptBuilder.build(
-            userInput = request.prompt,
-            history = request.conversationHistory,
-            mode = request.tutorMode,
-            compact = isCompact
-        )
+        // O modo teste manda o prompt cru: as questões do ENEM já vêm formatadas, e
+        // embrulhá-las em instrução pedagógica mudaria acurácia e custo de prefill.
+        val builtPrompt = if (request.rawPrompt) {
+            request.prompt
+        } else {
+            promptBuilder.build(
+                userInput = request.prompt,
+                history = request.conversationHistory,
+                mode = request.tutorMode,
+                compact = isCompact
+            )
+        }
 
         Log.d(TAG, "Rota: $decision | mode=${request.tutorMode} compact=$isCompact " +
                 "online=$isOnline local=$isLocalAvailable server=$isServerAvailable " +
@@ -154,7 +160,9 @@ class InferenceRouter @Inject constructor(
                 modelId = modelIdFor(result.source, serverBaseUrl),
                 connectivity = connectivity,
                 deviceId = deviceProfileProvider.deviceId(),
-                telemetry = result.telemetry
+                telemetry = result.telemetry,
+                blockId = request.blockId,
+                runIndex = request.runIndex
             )
         } catch (e: Exception) {
             Log.w(TAG, "Falha ao registrar log de roteamento: ${e.message}")

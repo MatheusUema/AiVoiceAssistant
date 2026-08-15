@@ -18,6 +18,12 @@ val localModel: String = providers.gradleProperty("local.model").getOrElse("gemm
 val localModelFallback: String =
     providers.gradleProperty("local.model.fallback").getOrElse("gemma3-1b")
 
+// Teto de tokens por resposta. 1024 serve ao chat; a bateria de medição usa 4, que é o
+// protocolo do artigo 1 (só a letra) — medido no Device 1, é a única condição viável:
+// com teto alto o Gemma 4 gasta tudo raciocinando e não responde em nenhuma questão.
+//   ./gradlew :app:assembleDebug -Plocal.maxtokens=4
+val localMaxTokens: String = providers.gradleProperty("local.maxtokens").getOrElse("1024")
+
 android {
     namespace = "com.voiceassistant"
     compileSdk = 35
@@ -38,6 +44,7 @@ android {
 
         buildConfigField("String", "LOCAL_MODEL", "\"$localModel\"")
         buildConfigField("String", "LOCAL_MODEL_FALLBACK", "\"$localModelFallback\"")
+        buildConfigField("int", "LOCAL_MAX_TOKENS", localMaxTokens)
     }
 
     buildTypes {
