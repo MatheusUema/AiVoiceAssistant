@@ -8,6 +8,22 @@ plugins {
     alias(libs.plugins.google.services)
 }
 
+// Modelo local ativo. A matriz de testes é SEQUENCIAL (uma bateria completa por modelo),
+// então trocar de bateria é trocar esta propriedade — nada de editar Kotlin entre rodadas:
+//   ./gradlew :app:assembleDebug -Plocal.model=qwen-1.5b
+// Chaves válidas em LocalModelConfig.CATALOG: gemma4-e2b, gemma3-1b, qwen-1.5b, qwen-0.5b.
+// O fallback (usado só quando o primário não carrega) sai em -Plocal.model.fallback;
+// "none" desliga o fallback.
+val localModel: String = providers.gradleProperty("local.model").getOrElse("gemma4-e2b")
+val localModelFallback: String =
+    providers.gradleProperty("local.model.fallback").getOrElse("gemma3-1b")
+
+// Teto de tokens por resposta. 1024 serve ao chat; a bateria de medição usa 4, que é o
+// protocolo do artigo 1 (só a letra) — medido no Device 1, é a única condição viável:
+// com teto alto o Gemma 4 gasta tudo raciocinando e não responde em nenhuma questão.
+//   ./gradlew :app:assembleDebug -Plocal.maxtokens=4
+val localMaxTokens: String = providers.gradleProperty("local.maxtokens").getOrElse("1024")
+
 android {
     namespace = "com.voiceassistant"
     compileSdk = 35
@@ -25,6 +41,10 @@ android {
         ksp {
             arg("room.schemaLocation", "$projectDir/schemas")
         }
+
+        buildConfigField("String", "LOCAL_MODEL", "\"$localModel\"")
+        buildConfigField("String", "LOCAL_MODEL_FALLBACK", "\"$localModelFallback\"")
+        buildConfigField("int", "LOCAL_MAX_TOKENS", localMaxTokens)
     }
 
     buildTypes {
@@ -60,20 +80,35 @@ android {
         unitTests.isReturnDefaultValues = true
     }
 
+    // O MigrationTestHelper lê os schemas exportados como assets do APK de teste.
+    // Sem isto, o teste de migração não encontra o schema da versão de origem.
+    sourceSets.getByName("androidTest") {
+        assets.srcDirs("$projectDir/schemas")
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
             excludes += "/META-INF/DEPENDENCIES"
         }
+        jniLibs {
+            // O empacotamento do APK final é decidido aqui, não no módulo :llama.
+            // Precisa ser legacy (extrair na instalação) porque o ggml faz `dlopen` das
+            // variantes de CPU por caminho absoluto — ver comentário em :llama.
+            useLegacyPackaging = true
+        }
     }
 
-    // Não comprimir modelos LLM — MediaPipe precisa acessá-los sem descompressão
+    // Não comprimir modelos LLM — llama.cpp usa mmap sobre o arquivo, sem descompressão
     androidResources {
-        noCompress += listOf("bin", "tflite", "task", "litertlm")
+        noCompress += listOf("bin", "tflite", "task", "litertlm", "gguf")
     }
 }
 
 dependencies {
+    // --- Tier local: llama.cpp via JNI ---
+    implementation(project(":llama"))
+
     // --- AndroidX Core ---
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -130,6 +165,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.room.testing)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.ui.test.junit4)

@@ -10,6 +10,7 @@ import com.voiceassistant.ai_server.model.ServerConfig
 import com.voiceassistant.ai_server.service.ServerInferenceService
 import com.voiceassistant.ai_server.service.ServerResult
 import com.voiceassistant.ai_server.service.ServerUnavailableException
+import com.voiceassistant.core.device.DeviceProfileProvider
 import com.voiceassistant.core.logging.RoutingLogger
 import com.voiceassistant.core.model.InferenceRequest
 import com.voiceassistant.core.model.InferenceResult
@@ -17,6 +18,7 @@ import com.voiceassistant.core.model.InferenceSource
 import com.voiceassistant.core.model.PromptComplexity
 import com.voiceassistant.core.network.NetworkMonitor
 import com.voiceassistant.core.storage.UserSettingsDataStore
+import com.voiceassistant.core.telemetry.ProcessRamSampler
 import com.voiceassistant.domain.repository.InferenceRepository
 import com.voiceassistant.feature_tutor.prompt.TutorPromptBuilder
 import kotlinx.coroutines.flow.first
@@ -65,7 +67,9 @@ class InferenceRouter @Inject constructor(
     private val networkMonitor: NetworkMonitor,
     private val userSettingsDataStore: UserSettingsDataStore,
     private val promptBuilder: TutorPromptBuilder,
-    private val routingLogger: RoutingLogger
+    private val routingLogger: RoutingLogger,
+    private val deviceProfileProvider: DeviceProfileProvider,
+    private val ramSampler: ProcessRamSampler = ProcessRamSampler()
 ) : InferenceRepository {
 
     override suspend fun infer(request: InferenceRequest): InferenceResult {
@@ -97,12 +101,18 @@ class InferenceRouter @Inject constructor(
         )
 
         val isCompact = decision.usesCompactPrompt
-        val builtPrompt = promptBuilder.build(
-            userInput = request.prompt,
-            history = request.conversationHistory,
-            mode = request.tutorMode,
-            compact = isCompact
-        )
+        // O modo teste manda o prompt cru: as questões do ENEM já vêm formatadas, e
+        // embrulhá-las em instrução pedagógica mudaria acurácia e custo de prefill.
+        val builtPrompt = if (request.rawPrompt) {
+            request.prompt
+        } else {
+            promptBuilder.build(
+                userInput = request.prompt,
+                history = request.conversationHistory,
+                mode = request.tutorMode,
+                compact = isCompact
+            )
+        }
 
         Log.d(TAG, "Rota: $decision | mode=${request.tutorMode} compact=$isCompact " +
                 "online=$isOnline local=$isLocalAvailable server=$isServerAvailable " +
@@ -148,7 +158,11 @@ class InferenceRouter @Inject constructor(
                 mode = request.tutorMode,
                 latencyMs = result.latencyMs,
                 modelId = modelIdFor(result.source, serverBaseUrl),
-                connectivity = connectivity
+                connectivity = connectivity,
+                deviceId = deviceProfileProvider.deviceId(),
+                telemetry = result.telemetry,
+                blockId = request.blockId,
+                runIndex = request.runIndex
             )
         } catch (e: Exception) {
             Log.w(TAG, "Falha ao registrar log de roteamento: ${e.message}")
@@ -161,7 +175,11 @@ class InferenceRouter @Inject constructor(
      * do modelo servido não é exposto pela app; registre-o à parte (ver docs/05).
      */
     private fun modelIdFor(source: InferenceSource, serverBaseUrl: String): String = when (source) {
-        InferenceSource.LOCAL -> localModelConfig.modelFileName
+        // O modelo **carregado**, não o configurado: quando o primário não cabe e o
+        // fallback assume (Device 2), registrar o configurado seria mentir sobre quem
+        // respondeu — bem no caso que o estudo quer medir. Cai na config só se o
+        // runtime não souber dizer.
+        InferenceSource.LOCAL -> localService.loadedModelId ?: localModelConfig.modelFileName
         InferenceSource.SERVER -> "llama-server@$serverBaseUrl"
         InferenceSource.CLOUD -> cloudModelConfig.modelName
         // FALLBACK é ambíguo (servidor ou cloud, após falha do tier primário).
@@ -250,12 +268,41 @@ class InferenceRouter @Inject constructor(
         )
     }
 
-    private suspend fun runLocal(prompt: String): InferenceResult {
+    /**
+     * @param hasFallback true quando existe outro tier para onde escalar. Encurta o
+     *   orçamento de tempo do local: com alternativa disponível, esperar o timeout
+     *   longo e só então chamar a nuvem soma as latências e piora a resposta.
+     */
+    private suspend fun runLocal(prompt: String, hasFallback: Boolean = false): InferenceResult {
         val start = System.currentTimeMillis()
-        val raw = localService.generate(prompt)
+        val budgetMs = if (hasFallback) {
+            localModelConfig.generationTimeoutWithFallbackMs
+        } else {
+            localModelConfig.generationTimeoutMs
+        }
+        // O pico de RAM (H4) tem que ser amostrado *durante* a geração: os buffers de
+        // compute nascem e morrem ao longo do decode, então ler no fim perderia o pico.
+        val (raw, peakRamMb) = ramSampler.measurePeak { localService.generate(prompt, budgetMs) }
         val latency = System.currentTimeMillis() - start
-        Log.i(TAG, "LOCAL concluído em ${latency}ms")
-        return InferenceResult(text = cleanResponse(raw), source = InferenceSource.LOCAL, latencyMs = latency)
+
+        val telemetry = localService.lastTelemetry?.copy(peakProcessRamMb = peakRamMb)
+
+        Log.i(
+            TAG,
+            "LOCAL concluído em ${latency}ms" + (telemetry?.let {
+                " | ${it.promptTokens}→${it.generatedTokens} tok, " +
+                        "TTFT ${it.ttftMs.toInt()}ms, " +
+                        "${"%.1f".format(it.generatedTokensPerSec)} tok/s, " +
+                        "pico RAM ${it.peakProcessRamMb}MB"
+            } ?: "")
+        )
+
+        return InferenceResult(
+            text = cleanResponse(raw),
+            source = InferenceSource.LOCAL,
+            latencyMs = latency,
+            telemetry = telemetry
+        )
     }
 
     private suspend fun runCloud(prompt: String): InferenceResult {
@@ -268,7 +315,7 @@ class InferenceRouter @Inject constructor(
 
     private suspend fun runLocalWithCloudFallback(prompt: String): InferenceResult {
         return try {
-            runLocal(prompt)
+            runLocal(prompt, hasFallback = true)
         } catch (localError: Exception) {
             Log.w(TAG, "FALLBACK: local falhou (${localError.message}), tentando cloud")
             try {
@@ -339,7 +386,8 @@ class InferenceRouter @Inject constructor(
     private suspend fun runServerFallback(prompt: String): InferenceResult {
         if (localModelManager.isAvailable) {
             // Marca como FALLBACK (não LOCAL): o tier primário (servidor) falhou.
-            runCatching { return runLocal(prompt).copy(source = InferenceSource.FALLBACK) }
+            runCatching { return runLocal(prompt, hasFallback = cloudService.isAvailable)
+                .copy(source = InferenceSource.FALLBACK) }
                 .onFailure { Log.w(TAG, "Fallback local falhou: ${it.message}") }
         }
         if (cloudService.isAvailable) {
@@ -356,7 +404,7 @@ class InferenceRouter @Inject constructor(
 
     private suspend fun runLocalWithServerFallback(prompt: String): InferenceResult {
         return try {
-            runLocal(prompt)
+            runLocal(prompt, hasFallback = true)
         } catch (localError: Exception) {
             Log.w(TAG, "FALLBACK: local falhou (${localError.message}), tentando servidor")
             try {

@@ -24,3 +24,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "VoiceAssistant"
 include(":app")
+// Runtime local: ponte JNI sobre llama.cpp (substitui o MediaPipe no tier LOCAL).
+include(":llama")

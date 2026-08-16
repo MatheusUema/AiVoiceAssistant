@@ -14,6 +14,11 @@ import javax.inject.Singleton
 /**
  * Implementação de [LocalInferenceService] usando MediaPipe LLM Inference Task.
  *
+ * ⚠️ **Não é mais o binding padrão** — o tier local roda em [LlamaCppLocalInferenceService]
+ * (llama.cpp/JNI), que dá TTFT e tokens/s reais e compartilha o motor com o `llama-server`.
+ * Esta classe fica no repositório apenas para a comparação de paridade de saída
+ * MediaPipe × llama.cpp descrita no plano (doc 06 §1.4). Requer modelos `.task`.
+ *
  * Responsabilidades:
  *  - Criar [LlmInference] a partir de um caminho de modelo no filesystem
  *  - Executar inferência síncrona em background thread
@@ -56,7 +61,8 @@ class MediaPipeLocalInferenceService @Inject constructor(
         try {
             val options = LlmInference.LlmInferenceOptions.builder()
                 .setModelPath(modelPath)
-                .setMaxTokens(config.maxTokens)
+                // No MediaPipe `maxTokens` é o KV-cache total (prompt + resposta).
+                .setMaxTokens(config.contextSize)
                 .build()
 
             llmInference = LlmInference.createFromOptions(context, options)

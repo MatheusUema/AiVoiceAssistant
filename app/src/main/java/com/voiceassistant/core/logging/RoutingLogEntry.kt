@@ -32,8 +32,67 @@ data class RoutingLogEntry(
     /** Modo pedagógico aplicado (TutorMode.name). */
     val pedagogicalMode: String,
     val latencyMs: Long,
-    /** Identificador do modelo usado, ex.: "gemma3-1b-it-int4.task" | "gemini-2.0-flash-lite". */
+    /** Identificador do modelo usado, ex.: "gemma-4-e2b-it-q4_k_m" | "gemini-2.0-flash-lite". */
     val modelId: String,
     /** Conectividade no momento: "offline" | "lan" | "internet". */
-    val connectivity: String
-)
+    val connectivity: String,
+
+    // ── Métricas de hardware (doc 06 §2/§3.1) ────────────────────────────────
+    // Convenção do projeto: -1 = indisponível. Tiers que não instrumentam (cloud)
+    // deixam tudo em -1 em vez de zerar, para não virar "custo zero" na análise.
+
+    /** Aparelho que produziu esta linha — FK para `device_profile`. */
+    val deviceId: String = "",
+
+    /** Motor de inferência: "llamacpp" | "mediapipe" | "llama-server" | "gemini". */
+    val runtime: String? = null,
+
+    /** H3: tokens do prompt após o chat template. */
+    val promptTokens: Int = UNAVAILABLE_INT,
+    /** H3: tokens gerados, **incluindo** raciocínio. */
+    val generatedTokens: Int = UNAVAILABLE_INT,
+    /**
+     * Tokens gastos no canal de raciocínio (Gemma 4 e afins).
+     * Separado porque, sem isso, tokens/s de um modelo que raciocina não é comparável
+     * com o de um que não raciocina — e a matriz do estudo mistura os dois.
+     */
+    val reasoningTokens: Int = UNAVAILABLE_INT,
+
+    /** H2: tempo até o primeiro token (ms). */
+    val ttftMs: Double = UNAVAILABLE_DOUBLE,
+    /** H2: ingestão do prompt — prefill (ms). */
+    val ingestionMs: Double = UNAVAILABLE_DOUBLE,
+    /** H2: geração token-a-token — decode (ms). */
+    val generationMs: Double = UNAVAILABLE_DOUBLE,
+    /** H3: tokens gerados por segundo. */
+    val tokensPerSec: Double = UNAVAILABLE_DOUBLE,
+
+    /** H4: pico de PSS do processo durante esta inferência (MB). */
+    val peakProcessRamMb: Long = UNAVAILABLE_LONG,
+
+    /** Threads de inferência em uso. */
+    val threads: Int = UNAVAILABLE_INT,
+    /** Backends ggml ativos ("CPU", "Vulkan,CPU"). */
+    val backends: String? = null,
+
+    /**
+     * Por que a geração terminou: "END_OF_GENERATION" | "MAX_TOKENS" | "TIMEOUT".
+     * `TIMEOUT` é resultado sobre o aparelho, não erro — precisa ser filtrável.
+     */
+    val stopReason: String? = null,
+    /** True se a resposta não saiu inteira (teto de tokens ou timeout). */
+    val truncated: Boolean = false,
+
+    // ── Modo teste (Fase 4) ──────────────────────────────────────────────────
+
+    /** Bloco de medição a que esta linha pertence — junta com a energia (H5). */
+    val blockId: String? = null,
+    /** k-ésima repetição da mesma questão dentro do bloco. */
+    val runIndex: Int? = null
+) {
+    companion object {
+        const val UNAVAILABLE_INT: Int = -1
+        const val UNAVAILABLE_LONG: Long = -1L
+        const val UNAVAILABLE_DOUBLE: Double = -1.0
+    }
+}

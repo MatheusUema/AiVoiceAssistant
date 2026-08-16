@@ -9,6 +9,15 @@
     <!-- Internet: inferência via Firebase AI Logic (cloud) -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!--
+      Mantém a CPU acordada durante a bateria de medição (modo teste).
+      Sem isto o aparelho entra em Doze com a tela apagada e suspende a coleta no meio —
+      observado no Device 1: processo vivo, 0% de CPU, minutos sem avançar.
+      É wake lock PARCIAL: a tela fica apagada, senão o consumo do display entraria
+      na métrica de energia (H5), que é justamente o que se quer medir do modelo.
+    -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <!-- Verificação de conectividade para InferenceRouter -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 

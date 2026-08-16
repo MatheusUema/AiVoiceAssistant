@@ -1,11 +1,12 @@
 package com.voiceassistant.di
 
+import com.voiceassistant.BuildConfig
 import com.voiceassistant.ai_cloud.model.CloudModelConfig
 import com.voiceassistant.ai_cloud.service.CloudInferenceService
 import com.voiceassistant.ai_cloud.service.FirebaseCloudInferenceService
 import com.voiceassistant.ai_local.model.LocalModelConfig
+import com.voiceassistant.ai_local.service.LlamaCppLocalInferenceService
 import com.voiceassistant.ai_local.service.LocalInferenceService
-import com.voiceassistant.ai_local.service.MediaPipeLocalInferenceService
 import com.voiceassistant.ai_server.model.ServerConfig
 import com.voiceassistant.feature_voice.service.AndroidSpeechToTextService
 import com.voiceassistant.feature_voice.service.AndroidTextToSpeechService
@@ -30,9 +31,14 @@ abstract class ServiceModule {
     @Singleton
     abstract fun bindTextToSpeech(impl: AndroidTextToSpeechService): TextToSpeechService
 
+    /**
+     * Tier local roda em llama.cpp/JNI (módulo `:llama`).
+     * Para comparar paridade com o runtime antigo, troque por
+     * `MediaPipeLocalInferenceService` — a interface é a mesma (doc 06 §1.4).
+     */
     @Binds
     @Singleton
-    abstract fun bindLocalInference(impl: MediaPipeLocalInferenceService): LocalInferenceService
+    abstract fun bindLocalInference(impl: LlamaCppLocalInferenceService): LocalInferenceService
 
     @Binds
     @Singleton
@@ -40,13 +46,20 @@ abstract class ServiceModule {
 
     companion object {
         /**
-         * Caminho do modelo local: [LocalModelConfig.DEFAULT_MODEL_ASSET_PATH] -> ficheiro em
-         * `app/src/main/assets/` com esse caminho relativo. Para outro modelo, sobrescreve aqui, ex.:
-         * `LocalModelConfig(modelAssetPath = "models/gemma3-1b-it-int8.task")`.
+         * Modelo local ativo, escolhido em tempo de build por `-Plocal.model=<chave>`
+         * (default `gemma4-e2b`). A matriz de testes é sequencial: uma bateria completa
+         * por modelo, e trocar de bateria é só recompilar com outra chave.
+         *
+         * O fallback (`-Plocal.model.fallback`, `none` desliga) só entra quando o
+         * primário não carrega — o caso do Device 2, com 4 GB de RAM.
          */
         @Provides
         fun provideLocalModelConfig(): LocalModelConfig = LocalModelConfig(
-            modelAssetPath = LocalModelConfig.DEFAULT_MODEL_ASSET_PATH
+            primary = LocalModelConfig.variantOf(BuildConfig.LOCAL_MODEL),
+            fallback = BuildConfig.LOCAL_MODEL_FALLBACK
+                .takeUnless { it.equals("none", ignoreCase = true) }
+                ?.let { LocalModelConfig.variantOf(it) },
+            maxTokens = BuildConfig.LOCAL_MAX_TOKENS
         )
 
         @Provides
