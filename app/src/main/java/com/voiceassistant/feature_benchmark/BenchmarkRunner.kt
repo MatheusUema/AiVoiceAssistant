@@ -1,5 +1,7 @@
 package com.voiceassistant.feature_benchmark
 
+import android.content.Context
+import android.os.PowerManager
 import android.util.Log
 import com.voiceassistant.core.model.InferenceRequest
 import com.voiceassistant.core.model.PromptComplexity
@@ -9,6 +11,7 @@ import com.voiceassistant.domain.repository.InferenceRepository
 import com.voiceassistant.feature_benchmark.data.EnemDataset
 import com.voiceassistant.feature_benchmark.data.EnemPromptBuilder
 import com.voiceassistant.feature_benchmark.data.EnemQuestion
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,6 +34,7 @@ import kotlin.coroutines.coroutineContext
  */
 @Singleton
 class BenchmarkRunner @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val dataset: EnemDataset,
     private val promptBuilder: EnemPromptBuilder,
     private val inferenceRepository: InferenceRepository,
@@ -45,7 +49,35 @@ class BenchmarkRunner @Inject constructor(
      *
      * @return o resumo por bloco. As linhas por questão já estão na `routing_log`.
      */
-    suspend fun run(config: BenchmarkConfig): BenchmarkReport {
+    suspend fun run(config: BenchmarkConfig): BenchmarkReport = withWakeLock {
+        runBattery(config)
+    }
+
+    /**
+     * Mantém a CPU acordada durante toda a bateria.
+     *
+     * Sem isto o aparelho entra em Doze com a tela apagada e **suspende a coleta no meio**
+     * — observado no Device 1: processo vivo, 0% de CPU, cinco minutos sem avançar. Numa
+     * coleta de horas isso invalidaria a execução inteira, e em silêncio.
+     *
+     * É um wake lock **parcial** de propósito: manter a tela ligada resolveria o problema
+     * mas somaria o consumo do display a H5, que é justamente o que se quer medir do
+     * modelo. Aqui a CPU fica acordada e a tela apagada.
+     */
+    private suspend fun <T> withWakeLock(block: suspend () -> T): T {
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKE_LOCK_TAG)
+        return try {
+            // Sem timeout: a bateria pode durar horas, e um limite curto reintroduziria
+            // o problema no meio da coleta. O release no finally é a garantia.
+            wakeLock.acquire()
+            block()
+        } finally {
+            if (wakeLock.isHeld) wakeLock.release()
+        }
+    }
+
+    private suspend fun runBattery(config: BenchmarkConfig): BenchmarkReport {
         val questions = dataset.balancedSample(config.questionsPerArea, config.sampleSeed)
         if (questions.isEmpty()) {
             _progress.value = BenchmarkProgress.Failed("Nenhuma questão carregada do dataset")
@@ -167,6 +199,7 @@ class BenchmarkRunner @Inject constructor(
 
     private companion object {
         const val TAG = "BenchmarkRunner"
+        const val WAKE_LOCK_TAG = "VoiceAssistant::Benchmark"
     }
 }
 
