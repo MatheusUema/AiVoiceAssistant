@@ -19,6 +19,8 @@ import com.voiceassistant.core.model.ChatMessage
  * v3: métricas de hardware na `routing_log` + tabelas `model_load_log` e
  *     `device_profile` — as três tabelas do estudo de elasticidade (doc 06 §3),
  *     casáveis por `deviceId`.
+ * v4: eixo de acurácia na `routing_log` (resposta completa, gabarito, letra extraída
+ *     e como foi extraída) — o outro eixo da fronteira de Pareto.
  */
 @Database(
     entities = [
@@ -27,7 +29,7 @@ import com.voiceassistant.core.model.ChatMessage
         ModelLoadLogEntry::class,
         DeviceProfileEntry::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = true   // permite versionamento das migrações em /schemas
 )
 @TypeConverters(Converters::class)

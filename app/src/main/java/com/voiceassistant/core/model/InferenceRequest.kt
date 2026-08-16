@@ -30,7 +30,33 @@ data class InferenceRequest(
     val blockId: String? = null,
 
     /** k-ésima repetição desta questão dentro do bloco. Null fora do modo teste. */
-    val runIndex: Int? = null
+    val runIndex: Int? = null,
+
+    /**
+     * Id da questão no dataset (`questao_87`). Null fora do modo teste.
+     *
+     * **Não é único sozinho**: no `maritaca_enem_irt.csv` são 540 linhas para 180 ids —
+     * cada id se repete nos três anos. A chave é `(questionId, questionYear)`, e as
+     * análises do artigo 1 já tropeçaram nisso (ver `_analise_debias.py`, que compara a
+     * contagem pela "chave ANTIGA, com bug" com a correta).
+     */
+    val questionId: String? = null,
+
+    /** Ano da questão — a outra metade da chave. Ver [questionId]. */
+    val questionYear: Int? = null,
+
+    /** Área (LC/CH/CN/MT), para a análise por área sem precisar juntar com o dataset. */
+    val questionArea: String? = null,
+
+    /**
+     * Gabarito (A–E) da questão, quando ela tem um. Null fora do modo teste.
+     *
+     * É só um rótulo carregado junto: o roteador não decide nada com ele, apenas o
+     * repassa ao log para que a linha nasça com o eixo de acurácia. Sem isso, casar
+     * resposta com gabarito depois exigiria reidentificar a questão pelo texto — que é
+     * frágil e se perde quando a amostra muda.
+     */
+    val expectedAnswer: String? = null
 )
 
 enum class PromptComplexity {

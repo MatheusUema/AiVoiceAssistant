@@ -4,7 +4,10 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Monta o prompt de múltipla escolha e interpreta a resposta.
+ * Monta o prompt de múltipla escolha.
+ *
+ * Não interpreta a resposta: qual alternativa o modelo escolheu é decidido lendo o
+ * texto, na classificação manual do `answers.csv`.
  *
  * Deliberadamente **igual ao protocolo do artigo 1**: pedir só a letra. Mudar o formato
  * aqui tornaria a acurácia medida no aparelho incomparável com a já medida no
@@ -36,31 +39,24 @@ class EnemPromptBuilder @Inject constructor() {
         append("\nResposta:")
     }
 
-    /**
-     * Extrai a letra escolhida. Aceita "C", "C)", "Resposta: C", "**C**" e afins.
-     *
-     * @return a letra em maiúscula, ou null se a resposta não contiver nenhuma —
-     *   distinguir "errou" de "não respondeu" importa: um modelo truncado antes de
-     *   emitir a letra não é a mesma coisa que um modelo que escolheu errado.
-     */
-    fun parseAnswer(raw: String): String? {
-        val cleaned = raw.trim()
-        if (cleaned.isEmpty()) return null
-
-        // Primeira letra A–E isolada (não no meio de uma palavra).
-        return ANSWER_PATTERN.find(cleaned)?.groupValues?.getOrNull(1)?.uppercase()
-    }
-
     private companion object {
         /**
-         * Sem pedir justificativa: o protocolo do artigo 1 usa `n_predict=4`, o que só
-         * dá espaço para a letra. Pedir raciocínio aqui mudaria o custo medido e a
-         * acurácia ao mesmo tempo, confundindo as duas coisas.
+         * O modelo **responde livremente** e a alternativa escolhida é determinada
+         * depois, analisando a resposta — é o protocolo do artigo 1, cada questão numa
+         * conversa nova.
+         *
+         * Não é detalhe de redação: sufocar a resposta num teto curto de tokens mede
+         * truncamento, não acurácia. Medido no Device 1, o Gemma 4 E2B gastou 161 tokens
+         * raciocinando e só 3 respondendo antes de ser cortado — com teto apertado a
+         * acurácia de um modelo que raciocina sai zero por construção, e a diferença
+         * entre modelos vira artefato do teto.
+         *
+         * Pedir a letra ao final é o que torna a resposta classificável sem ambiguidade,
+         * pela extração automática e pela conferência manual.
          */
         const val INSTRUCTION =
             "Responda à questão de múltipla escolha abaixo. " +
-                "Responda APENAS com a letra da alternativa correta (A, B, C, D ou E)."
-
-        val ANSWER_PATTERN = Regex("""\b([A-Ea-e])\b""")
+                "Explique seu raciocínio e termine indicando a alternativa correta " +
+                "no formato \"Resposta: X\", onde X é A, B, C, D ou E."
     }
 }

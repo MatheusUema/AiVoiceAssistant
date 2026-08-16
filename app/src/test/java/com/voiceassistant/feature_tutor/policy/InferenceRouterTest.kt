@@ -732,7 +732,8 @@ class RoutingLoggerCsvTest {
                 "tier,mode,latency_ms,model,connectivity,runtime,prompt_tokens," +
                 "generated_tokens,reasoning_tokens,ttft_ms,ingestion_ms,generation_ms," +
                 "tokens_per_sec,peak_ram_mb,threads,backends,stop_reason,truncated," +
-                "block_id,run_index",
+                "block_id,run_index,question_id,question_year,question_area,expected_answer," +
+                "predicted_answer,answer_method,is_correct,response",
             lines.first()
         )
         assertEquals(2, lines.size)
@@ -801,6 +802,8 @@ private class FakeRoutingLogDao : RoutingLogDao {
     override suspend fun getAll(): List<RoutingLogEntry> = entries.toList()
     override suspend fun getRecent(limit: Int): List<RoutingLogEntry> = entries.takeLast(limit)
     override suspend fun count(): Int = entries.size
+    override suspend fun getBySession(sessionId: String): List<RoutingLogEntry> =
+        entries.filter { it.sessionId == sessionId }
     override suspend fun clear() { entries.clear() }
 }
 

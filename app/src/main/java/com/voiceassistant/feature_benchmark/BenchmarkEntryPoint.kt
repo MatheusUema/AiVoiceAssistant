@@ -2,6 +2,7 @@ package com.voiceassistant.feature_benchmark
 
 import com.voiceassistant.ai_local.manager.LocalModelManager
 import com.voiceassistant.core.logging.RoutingLogger
+import com.voiceassistant.core.storage.UserSettingsDataStore
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
@@ -23,4 +24,16 @@ interface BenchmarkEntryPoint {
     fun benchmarkRunner(): BenchmarkRunner
     fun localModelManager(): LocalModelManager
     fun routingLogger(): RoutingLogger
+
+    /**
+     * Para fixar o cenário antes da coleta — na prática, ligar o modo privacidade para
+     * medir **só** o tier local.
+     *
+     * O jeito óbvio de isolar o local seria o modo avião, mas ele derruba a depuração por
+     * Wi-Fi e portanto a própria coleta. Além disso, com o aparelho online o roteador usa
+     * o orçamento curto de tempo (`generationTimeoutWithFallbackMs`, 30 s) porque existe
+     * nuvem para onde escalar — o que mede a política de fallback, não o aparelho. O modo
+     * privacidade resolve os dois: força a rota local e devolve o orçamento inteiro.
+     */
+    fun userSettings(): UserSettingsDataStore
 }
