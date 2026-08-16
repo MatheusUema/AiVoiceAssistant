@@ -54,6 +54,14 @@ class BenchmarkBatteryTest {
             BenchmarkEntryPoint::class.java
         )
 
+        // Cenário "só tier local". Ligado por padrão: com o aparelho online — e ele está,
+        // porque a depuração é por Wi-Fi — o roteador escalaria para a nuvem e, pior,
+        // encurtaria o orçamento de tempo do local para 30 s por existir alternativa.
+        // Medir o aparelho exige que ele seja a única opção.
+        val localOnly = args.getString("localOnly")?.toBooleanStrictOrNull() ?: true
+        entryPoint.userSettings().setPrivacyMode(localOnly)
+        Log.i(TAG, "modo privacidade (só tier local) = $localOnly")
+
         // O modelo é carregado pela Application; esperar é obrigatório, senão as
         // primeiras questões iriam para a nuvem e mediriam o tier errado.
         val manager = entryPoint.localModelManager()
@@ -97,8 +105,11 @@ class BenchmarkBatteryTest {
             )
         }
         report.errors.forEach { Log.w(TAG, "falha: $it") }
+        // Estado das respostas, não acurácia: a acurácia sai da classificação manual
+        // do `answers.csv`. O que importa aqui é se sobrou material classificável.
+        Log.i(TAG, "respostas: ${report.responses}")
 
-        // Exporta os três CSVs para o diretório externo do app, de onde saem por adb pull.
+        // Exporta os CSVs para o diretório externo do app, de onde saem por adb pull.
         val exportDir = File(context.getExternalFilesDir(null), EXPORT_DIR).apply { mkdirs() }
         entryPoint.routingLogger().exportAll().forEach { (name, content) ->
             File(exportDir, "${config.runLabel}-$name").writeText(content)

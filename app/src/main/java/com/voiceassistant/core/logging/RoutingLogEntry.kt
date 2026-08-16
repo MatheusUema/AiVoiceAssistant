@@ -87,8 +87,55 @@ data class RoutingLogEntry(
 
     /** Bloco de medição a que esta linha pertence — junta com a energia (H5). */
     val blockId: String? = null,
-    /** k-ésima repetição da mesma questão dentro do bloco. */
-    val runIndex: Int? = null
+    /** k-ésima repetição da mesma questão dentro do bloco (0..k-1). */
+    val runIndex: Int? = null,
+    /**
+     * Id da questão no dataset (`questao_87`).
+     *
+     * **Não é único sozinho** — 540 linhas para 180 ids, cada um repetido nos três anos.
+     * A chave é `(questionId, questionYear)`; agrupar só por id mistura questões
+     * diferentes, bug que as análises do artigo 1 já tiveram que corrigir.
+     */
+    val questionId: String? = null,
+    /** Ano da questão — a outra metade da chave. */
+    val questionYear: Int? = null,
+    /** Área (LC/CH/CN/MT) — a análise por área é a principal do artigo 1. */
+    val questionArea: String? = null,
+
+    // ── Acurácia ─────────────────────────────────────────────────────────────
+    // O outro eixo da fronteira de Pareto. Sem ele o estudo mede só custo, e "mais
+    // barato" fica indistinguível de "pior".
+    //
+    // O app **não** infere qual alternativa o modelo escolheu. Ele grava a resposta
+    // íntegra e o gabarito; a classificação é feita a olho, no `answers.csv`. Não é
+    // preciosismo: o modelo percorre e descarta alternativas antes de concluir, conclui
+    // sem citar letra ("afetou a membrana plasmática"), ou não conclui. Uma extração
+    // automática sobre isso acerta o suficiente para parecer certa e erra o suficiente
+    // para invalidar o resultado — medido, 2 de 4 respostas do Qwen foram atribuídas a
+    // alternativas que o modelo tinha acabado de descartar.
+
+    /**
+     * A resposta, **na íntegra** — é o dado bruto do eixo de acurácia.
+     *
+     * No modo pedagógico a resposta é a explicação que o aluno lê: é o objeto de estudo,
+     * não um subproduto. E é sobre este texto que a classificação manual acontece.
+     */
+    val responseText: String = "",
+
+    /** Gabarito (A–E), quando a questão tem um. Null em uso normal do app. */
+    val expectedAnswer: String? = null,
+
+    /**
+     * Alternativa que o modelo escolheu, **preenchida na classificação manual**.
+     * O app deixa null: ele não infere isto (ver o bloco acima).
+     */
+    val predictedAnswer: String? = null,
+
+    /** Origem da classificação, quando importada de volta ("manual"). */
+    val answerMethod: String? = null,
+
+    /** 1 = acertou, 0 = errou, -1 = ainda não classificada. */
+    val isCorrect: Int = UNAVAILABLE_INT
 ) {
     companion object {
         const val UNAVAILABLE_INT: Int = -1

@@ -98,6 +98,32 @@ object AppMigrations {
         }
     }
 
+    /**
+     * v3 → v4: eixo de acurácia na `routing_log` + `questionId`.
+     *
+     * ALTER TABLE de novo, pelo mesmo motivo: as linhas já coletadas são dados de
+     * pesquisa. As colunas nascem nulas nas linhas antigas — o que é correto, porque
+     * aquelas inferências realmente não foram graduadas. `isCorrect` usa -1 ("não
+     * graduado") e não 0, senão o histórico inteiro entraria na análise como erro.
+     */
+    val MIGRATION_3_4 = object : Migration(3, 4) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            val newColumns = listOf(
+                "`questionId` TEXT",
+                "`questionYear` INTEGER",
+                "`questionArea` TEXT",
+                "`responseText` TEXT NOT NULL DEFAULT ''",
+                "`expectedAnswer` TEXT",
+                "`predictedAnswer` TEXT",
+                "`answerMethod` TEXT",
+                "`isCorrect` INTEGER NOT NULL DEFAULT -1"
+            )
+            for (column in newColumns) {
+                db.execSQL("ALTER TABLE `routing_log` ADD COLUMN $column")
+            }
+        }
+    }
+
     /** Todas as migrações, na ordem — passe para o `Room.databaseBuilder`. */
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
 }

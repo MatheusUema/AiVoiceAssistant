@@ -3,6 +3,7 @@ package com.voiceassistant.feature_benchmark
 import android.content.Context
 import android.os.PowerManager
 import android.util.Log
+import com.voiceassistant.core.logging.RoutingLogDao
 import com.voiceassistant.core.model.InferenceRequest
 import com.voiceassistant.core.model.PromptComplexity
 import com.voiceassistant.core.telemetry.BlockEnergy
@@ -38,7 +39,8 @@ class BenchmarkRunner @Inject constructor(
     private val dataset: EnemDataset,
     private val promptBuilder: EnemPromptBuilder,
     private val inferenceRepository: InferenceRepository,
-    private val energyMeter: EnergyMeter
+    private val energyMeter: EnergyMeter,
+    private val routingLogDao: RoutingLogDao
 ) {
     private val _progress = MutableStateFlow<BenchmarkProgress>(BenchmarkProgress.Idle)
     val progress: StateFlow<BenchmarkProgress> = _progress.asStateFlow()
@@ -140,10 +142,38 @@ class BenchmarkRunner @Inject constructor(
             if (coroutineContext.isActive) delay(config.cooldownBetweenBlocksMs)
         }
 
+        val responses = tallyResponses(config.runLabel)
         _progress.value = BenchmarkProgress.Done(completed, plan.size, errors.size)
         Log.i(TAG, "Bateria concluída: $completed/${plan.size}, ${errors.size} falhas")
-        return BenchmarkReport(config, blocks, errors)
+        Log.i(TAG, "Respostas: $responses")
+        return BenchmarkReport(config, blocks, errors, responses)
     }
+
+    /**
+     * Apura o **estado** das respostas coletadas — não a acurácia.
+     *
+     * Qual alternativa o modelo escolheu é decidido lendo o texto, fora do app. O que
+     * dá para verificar aqui, e é o que decide se a coleta presta, é se a resposta saiu
+     * inteira: uma geração cortada no meio do raciocínio não tem alternativa nenhuma
+     * para classificar, e uma bateria cheia delas é uma bateria perdida. Foi exatamente
+     * o caso do Gemma 4 E2B — 4 de 4 truncadas, nenhuma classificável.
+     *
+     * Lê de volta da tabela em vez de acumular em memória, para que o número do
+     * relatório seja exatamente o que está no CSV.
+     */
+    private suspend fun tallyResponses(sessionId: String): BenchmarkResponses =
+        runCatching {
+            val rows = routingLogDao.getBySession(sessionId)
+            BenchmarkResponses(
+                total = rows.size,
+                complete = rows.count { !it.truncated && it.responseText.isNotBlank() },
+                truncated = rows.count { it.truncated },
+                failed = rows.count { it.responseText.startsWith(FAILURE_MARKER) }
+            )
+        }.getOrElse {
+            Log.w(TAG, "Falha ao apurar respostas: ${it.message}")
+            BenchmarkResponses()
+        }
 
     private suspend fun infer(item: PlanItem, blockId: String, config: BenchmarkConfig) {
         inferenceRepository.infer(
@@ -156,7 +186,13 @@ class BenchmarkRunner @Inject constructor(
                 // `difficulty_score` do dataset, não nesta heurística de texto.
                 complexity = PromptComplexity.SIMPLE,
                 blockId = blockId,
-                runIndex = item.runIndex
+                runIndex = item.runIndex,
+                questionId = item.question.id,
+                questionYear = item.question.year,
+                questionArea = item.question.area,
+                // O gabarito viaja junto para que a linha nasça graduada. Casar resposta
+                // com gabarito depois exigiria reidentificar a questão pelo texto.
+                expectedAnswer = item.question.label
             )
         )
     }
@@ -200,6 +236,7 @@ class BenchmarkRunner @Inject constructor(
     private companion object {
         const val TAG = "BenchmarkRunner"
         const val WAKE_LOCK_TAG = "VoiceAssistant::Benchmark"
+        const val FAILURE_MARKER = "[FALHA]"
     }
 }
 
@@ -237,8 +274,30 @@ data class BenchmarkConfig(
 data class BenchmarkReport(
     val config: BenchmarkConfig,
     val blocks: List<BlockEnergy>,
-    val errors: List<String>
+    val errors: List<String>,
+    val responses: BenchmarkResponses = BenchmarkResponses()
 )
+
+/**
+ * Estado das respostas coletadas — **não** é acurácia.
+ *
+ * A acurácia sai da classificação manual do `answers.csv`. O que este resumo responde é
+ * se a coleta produziu material classificável: [complete] é o que dá para ler e decidir,
+ * [truncated] é resposta cortada antes de concluir, [failed] é a que nem saiu (timeout).
+ * Uma bateria com [complete] baixo é uma bateria a refazer com outro modelo ou outro
+ * teto de tokens, e é melhor descobrir isso no fim da execução do que na análise.
+ */
+data class BenchmarkResponses(
+    val total: Int = 0,
+    val complete: Int = 0,
+    val truncated: Int = 0,
+    val failed: Int = 0
+) {
+    override fun toString(): String =
+        if (total == 0) "sem linhas"
+        else "%d/%d completas para classificar | %d truncadas | %d sem resposta"
+            .format(complete, total, truncated, failed)
+}
 
 sealed interface BenchmarkProgress {
     data object Idle : BenchmarkProgress

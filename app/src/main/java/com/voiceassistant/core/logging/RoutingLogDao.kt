@@ -23,6 +23,15 @@ interface RoutingLogDao {
     @Query("SELECT COUNT(*) FROM routing_log")
     suspend fun count(): Int
 
+    /**
+     * Linhas de uma execução da bateria, para apurar a acurácia no fim.
+     *
+     * Filtra por `sessionId` e não por `blockId` porque o warm-up usa outra sessão
+     * (`<label>-warmup`) — incluí-lo misturaria inferências descartáveis na acurácia.
+     */
+    @Query("SELECT * FROM routing_log WHERE sessionId = :sessionId ORDER BY timestamp")
+    suspend fun getBySession(sessionId: String): List<RoutingLogEntry>
+
     @Query("DELETE FROM routing_log")
     suspend fun clear()
 }

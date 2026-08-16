@@ -19,12 +19,12 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * O marco da Fase 3: os três CSVs saem e **casam por `device_id`**.
+ * O marco da Fase 3: os CSVs saem e **casam por `device_id`**.
  *
  * Sem esse casamento cada arquivo é uma ilha — não dá para dizer que aquele TTFT foi
  * medido naquele aparelho, nem associar uma falha de carga ao hardware que a causou.
  * O teste escreve pelas mesmas classes que o app usa em produção e confere que a chave
- * atravessa as três tabelas.
+ * atravessa todos os arquivos, inclusive o `answers.csv` de conferência manual.
  */
 @RunWith(AndroidJUnit4::class)
 class CsvExportTest {
@@ -77,7 +77,9 @@ class CsvExportTest {
                 threads = 4,
                 backends = "CPU",
                 stopReason = "END_OF_GENERATION"
-            )
+            ),
+            responseText = "Portanto, a resposta correta é C: 68.",
+            expectedAnswer = "C"
         )
 
         logger.logModelLoad(
@@ -99,7 +101,7 @@ class CsvExportTest {
         )
 
         val csvs = logger.exportAll()
-        assertEquals(3, csvs.size)
+        assertEquals(4, csvs.size)
         csvs.forEach { (name, content) -> Log.i(TAG, "── $name ──\n$content") }
 
         // Cada arquivo tem cabeçalho + exatamente uma linha de dados.
@@ -120,6 +122,25 @@ class CsvExportTest {
         assertTrue("tokens de prompt ausentes: $routingRow", routingRow.contains(",33,"))
         assertTrue("pico de RAM ausente: $routingRow", routingRow.contains(",2027,"))
         assertTrue("stop reason ausente: $routingRow", routingRow.contains("END_OF_GENERATION"))
+
+        // A resposta na íntegra é o dado bruto da acurácia: sem ela não há o que
+        // classificar depois, e a fronteira de Pareto fica só com o eixo de custo.
+        assertTrue("resposta ausente: $routingRow", routingRow.contains("a resposta correta é C"))
+
+        val answersRow = csvs.getValue("answers.csv").lines()[1]
+        assertTrue("gabarito ausente: $answersRow", answersRow.contains("\"C\""))
+        assertTrue("pergunta ausente: $answersRow", answersRow.contains("Quanto é 17 x 4?"))
+        assertTrue("resposta ausente: $answersRow", answersRow.contains("a resposta correta é C"))
+        // A coluna de classificação manual sai vazia, logo após o gabarito.
+        assertTrue("coluna manual deveria estar vazia: $answersRow", answersRow.contains("\"C\",,"))
+
+        // E o CSV não pode trazer palpite automático de alternativa: uma sugestão ao lado
+        // da coluna de preenchimento ancora quem classifica e vira resultado por inércia.
+        val answersHeader = csvs.getValue("answers.csv").lines()[0]
+        assertTrue(
+            "o answers.csv não deve sugerir alternativa: $answersHeader",
+            !answersHeader.contains("predicted_answer")
+        )
     }
 
     private companion object {

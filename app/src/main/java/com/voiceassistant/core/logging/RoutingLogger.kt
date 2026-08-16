@@ -41,7 +41,15 @@ class RoutingLogger @Inject constructor(
         deviceId: String = "",
         telemetry: InferenceTelemetry? = null,
         blockId: String? = null,
-        runIndex: Int? = null
+        runIndex: Int? = null,
+        questionId: String? = null,
+        questionYear: Int? = null,
+        questionArea: String? = null,
+        responseText: String = "",
+        expectedAnswer: String? = null,
+        predictedAnswer: String? = null,
+        answerMethod: String? = null,
+        isCorrect: Int = RoutingLogEntry.UNAVAILABLE_INT
     ) {
         dao.insert(
             RoutingLogEntry(
@@ -72,7 +80,15 @@ class RoutingLogger @Inject constructor(
                 stopReason = telemetry?.stopReason,
                 truncated = telemetry?.truncated ?: false,
                 blockId = blockId,
-                runIndex = runIndex
+                runIndex = runIndex,
+                questionId = questionId,
+                questionYear = questionYear,
+                questionArea = questionArea,
+                responseText = responseText,
+                expectedAnswer = expectedAnswer,
+                predictedAnswer = predictedAnswer,
+                answerMethod = answerMethod,
+                isCorrect = isCorrect
             )
         )
     }
@@ -119,7 +135,56 @@ class RoutingLogger @Inject constructor(
                 append(csv(e.stopReason.orEmpty())).append(',')
                 append(if (e.truncated) 1 else 0).append(',')
                 append(csv(e.blockId.orEmpty())).append(',')
-                append(e.runIndex?.toString().orEmpty())
+                append(e.runIndex?.toString().orEmpty()).append(',')
+                append(csv(e.questionId.orEmpty())).append(',')
+                append(e.questionYear?.toString().orEmpty()).append(',')
+                append(csv(e.questionArea.orEmpty())).append(',')
+                append(csv(e.expectedAnswer.orEmpty())).append(',')
+                append(csv(e.predictedAnswer.orEmpty())).append(',')
+                append(csv(e.answerMethod.orEmpty())).append(',')
+                append(e.isCorrect).append(',')
+                append(csv(e.responseText))
+            }
+        }
+    }
+
+    /**
+     * CSV de trabalho para a **classificação manual** das respostas.
+     *
+     * Separado do `routing_log` porque tem uso diferente: aquele é para análise
+     * estatística e tem mais de trinta colunas; este é para uma pessoa ler a pergunta,
+     * ler a resposta e decidir qual alternativa o modelo escolheu.
+     *
+     * Não traz palpite de extração automática, de propósito. Uma sugestão gerada por
+     * regex ao lado da coluna de preenchimento ancora quem classifica e, pior, tende a
+     * ser usada como resultado quando ninguém preenche. Medido no Qwen: 2 de 4 sugestões
+     * apontavam alternativas que o modelo tinha acabado de descartar.
+     *
+     * `id` é a chave de volta para o `routing_log`, e `stop_reason` avisa quais respostas
+     * estão truncadas — essas não têm conclusão para classificar.
+     */
+    suspend fun exportAnswersCsv(): String {
+        val entries = dao.getAll()
+        return buildString {
+            append(ANSWERS_HEADER)
+            for (e in entries) {
+                append('\n')
+                append(e.id).append(',')
+                append(csv(e.deviceId)).append(',')
+                append(csv(e.sessionId)).append(',')
+                append(csv(e.blockId.orEmpty())).append(',')
+                append(csv(e.questionId.orEmpty())).append(',')
+                append(e.questionYear?.toString().orEmpty()).append(',')
+                append(csv(e.questionArea.orEmpty())).append(',')
+                append(e.runIndex?.toString().orEmpty()).append(',')
+                append(e.finalTier).append(',')
+                append(csv(e.modelId)).append(',')
+                append(csv(e.stopReason.orEmpty())).append(',')
+                append(csv(e.expectedAnswer.orEmpty())).append(',')
+                // Coluna vazia: é a que você preenche com a alternativa que leu.
+                append(',')
+                append(csv(e.questionText)).append(',')
+                append(csv(e.responseText))
             }
         }
     }
@@ -180,11 +245,12 @@ class RoutingLogger @Inject constructor(
         }
     }
 
-    /** Os três CSVs de uma vez, prontos para gravar em arquivo. */
+    /** Os CSVs de uma vez, prontos para gravar em arquivo. */
     suspend fun exportAll(): Map<String, String> = mapOf(
         "routing_log.csv" to exportCsv(),
         "model_load_log.csv" to exportModelLoadCsv(),
-        "device_profile.csv" to exportDeviceProfileCsv()
+        "device_profile.csv" to exportDeviceProfileCsv(),
+        "answers.csv" to exportAnswersCsv()
     )
 
     /** Envolve em aspas e escapa aspas internas, neutralizando vírgulas e quebras de linha. */
@@ -201,7 +267,14 @@ class RoutingLogger @Inject constructor(
                 "tier,mode,latency_ms,model,connectivity,runtime,prompt_tokens," +
                 "generated_tokens,reasoning_tokens,ttft_ms,ingestion_ms,generation_ms," +
                 "tokens_per_sec,peak_ram_mb,threads,backends,stop_reason,truncated," +
-                "block_id,run_index"
+                "block_id,run_index,question_id,question_year,question_area,expected_answer," +
+                "predicted_answer,answer_method,is_correct,response"
+
+        /** `manual_answer` sai vazia de propósito: é a coluna que a pessoa preenche. */
+        private const val ANSWERS_HEADER =
+            "id,device_id,session_id,block_id,question_id,question_year,question_area," +
+                "run_index,tier,model,stop_reason,expected_answer,manual_answer," +
+                "question,response"
 
         private const val MODEL_LOAD_HEADER =
             "timestamp,device_id,model,model_size_bytes,load_ms,warmup_ms,outcome,reason," +

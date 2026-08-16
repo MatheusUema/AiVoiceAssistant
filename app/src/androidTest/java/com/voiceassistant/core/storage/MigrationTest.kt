@@ -6,6 +6,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.voiceassistant.core.storage.AppMigrations.MIGRATION_1_2
 import com.voiceassistant.core.storage.AppMigrations.MIGRATION_2_3
+import com.voiceassistant.core.storage.AppMigrations.MIGRATION_3_4
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -101,6 +102,48 @@ class MigrationTest {
             assertTrue("histórico de conversas perdido na migração", cursor.moveToFirst())
             assertEquals("olá", cursor.getString(0))
         }
+    }
+
+    /**
+     * v3 → v4: o eixo de acurácia. As linhas da v3 são coleta real (a bateria de energia
+     * do Device 1 já rodou nesse schema) — perdê-las custaria refazer horas de medição.
+     */
+    @Test
+    fun migra3Para4PreservandoAsMetricasDeHardware() {
+        helper.createDatabase(TEST_DB, 3).apply {
+            execSQL(
+                "INSERT INTO routing_log (timestamp, sessionId, questionText, " +
+                    "complexityPreFilter, routeDecision, confidenceScore, confidenceMethod, " +
+                    "finalTier, pedagogicalMode, latencyMs, modelId, connectivity, " +
+                    "deviceId, promptTokens, ttftMs, peakProcessRamMb, threads, truncated) " +
+                    "VALUES (1700000000000, 'dev1-gemma4-energia3', 'questão', 'SIMPLE', " +
+                    "'LOCAL', -1.0, 'none', 'LOCAL', 'EXPLAIN', 21222, 'gemma-4-e2b', " +
+                    "'offline', 'dev1', 395, 20543.9, 4190, 4, 1)"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 4, true, MIGRATION_3_4)
+
+        db.query("SELECT sessionId, promptTokens, ttftMs, peakProcessRamMb FROM routing_log")
+            .use { c ->
+                assertTrue("a coleta feita na v3 sumiu na migração", c.moveToFirst())
+                assertEquals(1, c.count)
+                assertEquals("dev1-gemma4-energia3", c.getString(0))
+                assertEquals(395, c.getInt(1))
+                assertEquals(20543.9, c.getDouble(2), 0.1)
+                assertEquals(4190L, c.getLong(3))
+            }
+
+        // A linha antiga não foi graduada — e tem que aparecer assim, não como erro.
+        db.query("SELECT isCorrect, expectedAnswer, predictedAnswer, responseText FROM routing_log")
+            .use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals("linha pré-acurácia tem que ser -1, não 0", -1, c.getInt(0))
+                assertTrue("expectedAnswer deveria ser nulo", c.isNull(1))
+                assertTrue("predictedAnswer deveria ser nulo", c.isNull(2))
+                assertEquals("", c.getString(3))
+            }
     }
 
     private companion object {

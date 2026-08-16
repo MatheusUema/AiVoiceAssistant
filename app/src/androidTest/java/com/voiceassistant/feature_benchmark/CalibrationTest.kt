@@ -86,8 +86,7 @@ class CalibrationTest {
             service.loadModel(model.absolutePath)
             service.warmup("Olá")
 
-            var correct = 0
-            var answered = 0
+            var completas = 0
             val latencies = mutableListOf<Double>()
             val prefills = mutableListOf<Double>()
 
@@ -99,39 +98,35 @@ class CalibrationTest {
                 val (raw, peakRamMb) = ramSampler.measurePeak { service.generate(prompt) }
                 val stats = service.lastStats ?: continue
 
-                // Só vale como resposta se a geração terminou sozinha. Cortada no meio do
-                // raciocínio, o texto devolvido é o monólogo do modelo — e procurar uma
-                // letra ali pesca a primeira que aparecer. Foi o que aconteceu na primeira
-                // rodada: as 8 questões "escolheram A", e um acerto saiu por coincidência.
-                // Sem esta guarda, a bateria produziria uma coluna de respostas plausíveis
-                // e inteiramente falsas.
-                val chosen = if (stats.truncated) null else promptBuilder.parseAnswer(raw)
-                if (chosen != null) answered++
-                if (chosen == question.label) correct++
+                // Esta calibração mede **custo**, não acurácia. Qual alternativa o modelo
+                // escolheu se decide lendo a resposta, fora daqui. O que dá para verificar
+                // é se a geração terminou sozinha: cortada no meio, não há resposta para
+                // classificar — e uma condição que trunca tudo é inviável, independente
+                // do que o modelo saberia responder.
+                if (!stats.truncated) completas++
                 latencies += stats.totalMs
                 prefills += stats.prefillMs
 
                 Log.i(
                     TAG,
                     ("%s %s | %d→%d tok (raciocínio %d) | prefill %.0fms decode %.0fms " +
-                            "total %.0fms | RAM %d MB | escolheu %s, correta %s | %s")
+                            "total %.0fms | RAM %d MB | %d chars | %s")
                         .format(
                             condition.name, question.id,
                             stats.promptTokens, stats.generatedTokens, stats.reasoningTokens,
                             stats.prefillMs, stats.decodeMs, stats.totalMs,
-                            peakRamMb, chosen ?: "-", question.label, stats.stopReason
+                            peakRamMb, raw.length, stats.stopReason
                         )
                 )
             }
 
-            val n = latencies.size.coerceAtLeast(1)
             Log.i(
                 TAG,
-                ("RESUMO %s | %d questões | acertos %d (%.0f%%) | respondidas %d | " +
+                ("RESUMO %s | %d questões | %d completas (classificáveis) | " +
                         "latência mediana %.0fms | prefill mediano %.0fms | estimado por bloco " +
                         "de 20 com k=3: %.1f min")
                     .format(
-                        condition.name, latencies.size, correct, 100.0 * correct / n, answered,
+                        condition.name, latencies.size, completas,
                         latencies.median(), prefills.median(),
                         latencies.median() * 20 * 3 / 60_000.0
                     )

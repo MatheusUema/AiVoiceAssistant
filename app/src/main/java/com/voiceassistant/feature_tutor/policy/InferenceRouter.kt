@@ -119,11 +119,61 @@ class InferenceRouter @Inject constructor(
                 "cloud=$isCloudAvailable privacy=${settings.privacyModeEnabled} " +
                 "complexity=${request.complexity}")
 
-        val result = executeDecision(decision, builtPrompt)
+        // A falha é registrada **antes** de propagar. Sem isto, toda inferência que
+        // estoura o tempo desaparece do `routing_log`: o log só acontecia depois da
+        // execução, então os timeouts existiam apenas no logcat. É justamente o dado
+        // mais importante dos aparelhos fracos — "este aparelho não sustenta este
+        // modelo" — e a coluna `stopReason` nunca chegava a receber `TIMEOUT`, porque a
+        // linha não nascia.
+        val started = System.currentTimeMillis()
+        val result = try {
+            executeDecision(decision, builtPrompt)
+        } catch (e: Exception) {
+            logFailure(request, decision, e, System.currentTimeMillis() - started,
+                isOnline, isServerAvailable, effectiveServerBaseUrl)
+            throw e
+        }
 
         logRouting(request, decision, result, isOnline, isServerAvailable, effectiveServerBaseUrl)
 
         return result
+    }
+
+    /**
+     * Registra uma inferência que **falhou**, com a telemetria que o tier local tiver
+     * conseguido produzir até ser interrompido.
+     *
+     * Uma geração cortada por timeout já mediu prefill, TTFT e quantos tokens saíram —
+     * descartar isso jogaria fora a evidência de quão longe o aparelho chegou. A linha
+     * nasce sem resposta e sem graduação (`isCorrect = -1`), que é o correto: não houve
+     * resposta para graduar, e isso não é o mesmo que errar a alternativa.
+     */
+    private suspend fun logFailure(
+        request: InferenceRequest,
+        decision: RoutingDecision,
+        error: Exception,
+        latencyMs: Long,
+        isOnline: Boolean,
+        isServerAvailable: Boolean,
+        serverBaseUrl: String
+    ) {
+        val telemetry = if (decision.targetsLocal) localService.lastTelemetry else null
+        logRouting(
+            request = request,
+            decision = decision,
+            result = InferenceResult(
+                // O texto guarda o motivo da falha: no CSV, a coluna `response` explica
+                // por que aquela questão não tem resposta.
+                text = "",
+                source = InferenceSource.LOCAL,
+                latencyMs = latencyMs,
+                telemetry = telemetry
+            ),
+            isOnline = isOnline,
+            isServerAvailable = isServerAvailable,
+            serverBaseUrl = serverBaseUrl,
+            failureReason = error.message ?: error::class.simpleName.orEmpty()
+        )
     }
 
     /**
@@ -136,7 +186,9 @@ class InferenceRouter @Inject constructor(
         result: InferenceResult,
         isOnline: Boolean,
         isServerAvailable: Boolean,
-        serverBaseUrl: String
+        serverBaseUrl: String,
+        /** Não-nulo quando a inferência falhou: vai para a coluna `response` do CSV. */
+        failureReason: String? = null
     ) {
         val connectivity = when {
             isOnline -> "internet"
@@ -162,7 +214,19 @@ class InferenceRouter @Inject constructor(
                 deviceId = deviceProfileProvider.deviceId(),
                 telemetry = result.telemetry,
                 blockId = request.blockId,
-                runIndex = request.runIndex
+                runIndex = request.runIndex,
+                questionId = request.questionId,
+                questionYear = request.questionYear,
+                questionArea = request.questionArea,
+                // A resposta vai inteira; a alternativa escolhida **não** é inferida aqui.
+                // Determinar qual alternativa o modelo escolheu exige ler o texto: ele
+                // percorre e descarta alternativas antes de concluir, às vezes conclui
+                // sem citar letra nenhuma ("afetou a membrana plasmática"), e às vezes
+                // não conclui. Uma regex sobre isso produz um número plausível e errado
+                // — medido: 2 de 4 respostas do Qwen foram atribuídas a alternativas que
+                // o modelo tinha acabado de descartar. A classificação é manual.
+                responseText = failureReason?.let { "[FALHA] $it" } ?: result.text,
+                expectedAnswer = request.expectedAnswer
             )
         } catch (e: Exception) {
             Log.w(TAG, "Falha ao registrar log de roteamento: ${e.message}")
