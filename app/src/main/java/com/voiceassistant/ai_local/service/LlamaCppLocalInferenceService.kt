@@ -99,7 +99,8 @@ class LlamaCppLocalInferenceService @Inject constructor(
                 threads = engine.threads,
                 backends = engine.modelInfo?.backends,
                 truncated = stats.truncated,
-                stopReason = stats.stopReason.name
+                stopReason = stats.stopReason.name,
+                confidence = stats.confidence.toFloat()
             )
         }
 

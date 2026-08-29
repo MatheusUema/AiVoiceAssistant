@@ -109,7 +109,17 @@ data class LlamaStats(
     val stoppedAtEog: Boolean = false,
 
     /** True se a geração foi interrompida por timeout. */
-    val cancelled: Boolean = false
+    val cancelled: Boolean = false,
+
+    /**
+     * Confiança em [0,1]: média da probabilidade do token **escolhido** em cada posição
+     * gerada. [LLAMA_UNAVAILABLE] (-1) quando nenhuma posição foi medida.
+     *
+     * Mesma definição do tier servidor (`ServerInferenceService.calculateConfidence`) e
+     * da `app_confidence()` do artigo 1 — é o que permite comparar a confiança medida
+     * no aparelho com a do `llama-server` sem que a fórmula vire variável oculta.
+     */
+    val confidence: Double = LLAMA_UNAVAILABLE
 ) {
     /** Por que a geração terminou. */
     val stopReason: LlamaStopReason
@@ -135,6 +145,9 @@ data class LlamaStats(
         fun fromArray(values: DoubleArray?): LlamaStats {
             if (values == null || values.size < 10) return LlamaStats()
             return LlamaStats(
+                // `getOrElse` no campo novo: uma lib nativa antiga (array de 10) continua
+                // carregando, com a confiança indisponível em vez de estourar índice.
+                confidence = values.getOrElse(10) { LLAMA_UNAVAILABLE },
                 ttftMs = values[0],
                 prefillMs = values[1],
                 decodeMs = values[2],

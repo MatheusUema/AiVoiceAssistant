@@ -64,7 +64,18 @@ data class InferenceTelemetry(
      * `TIMEOUT` é o caso que mais interessa ao estudo: significa que o aparelho não
      * sustentou o modelo dentro de um tempo que um aluno aceitaria esperar.
      */
-    val stopReason: String? = null
+    val stopReason: String? = null,
+
+    /**
+     * Confiança em [0,1]: média da probabilidade do token **escolhido** em cada posição
+     * gerada. -1 quando o tier não expõe logprobs (cloud).
+     *
+     * Mesma definição do tier servidor (`ServerInferenceService.calculateConfidence`) e
+     * da `app_confidence()` do artigo 1. Ter a mesma fórmula nos dois tiers é o que
+     * permite comparar a confiança medida no aparelho com a do `llama-server` — com
+     * definições diferentes, a comparação mediria a fórmula, não os modelos.
+     */
+    val confidence: Float = UNAVAILABLE_FLOAT
 ) {
     /** Tokens de prompt por segundo (velocidade de ingestão). */
     val promptTokensPerSec: Double
@@ -82,5 +93,6 @@ data class InferenceTelemetry(
         const val UNAVAILABLE: Double = -1.0
         const val UNAVAILABLE_INT: Int = -1
         const val UNAVAILABLE_LONG: Long = -1L
+        const val UNAVAILABLE_FLOAT: Float = -1f
     }
 }

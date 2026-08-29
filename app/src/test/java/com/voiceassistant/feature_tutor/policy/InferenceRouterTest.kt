@@ -13,6 +13,8 @@ import com.voiceassistant.ai_server.service.ServerInferenceService
 import com.voiceassistant.ai_server.service.ServerResult
 import com.voiceassistant.ai_server.service.ServerUnavailableException
 import com.voiceassistant.core.device.DeviceProfileProvider
+import com.voiceassistant.core.logging.BlockEnergyDao
+import com.voiceassistant.core.logging.BlockEnergyEntry
 import com.voiceassistant.core.logging.DeviceProfileDao
 import com.voiceassistant.core.logging.DeviceProfileEntry
 import com.voiceassistant.core.logging.ModelLoadLogDao
@@ -807,6 +809,16 @@ private class FakeRoutingLogDao : RoutingLogDao {
     override suspend fun clear() { entries.clear() }
 }
 
+private class FakeBlockEnergyDao : BlockEnergyDao {
+    val entries = mutableListOf<BlockEnergyEntry>()
+    override suspend fun insert(entry: BlockEnergyEntry) { entries.add(entry) }
+    override suspend fun getAll(): List<BlockEnergyEntry> = entries.toList()
+    override suspend fun getByBlock(blockId: String): List<BlockEnergyEntry> =
+        entries.filter { it.blockId == blockId }
+    override suspend fun count(): Int = entries.size
+    override suspend fun clear() { entries.clear() }
+}
+
 private class FakeModelLoadLogDao : ModelLoadLogDao {
     val entries = mutableListOf<ModelLoadLogEntry>()
     override suspend fun insert(entry: ModelLoadLogEntry) { entries.add(entry) }
@@ -825,9 +837,9 @@ private class FakeDeviceProfileDao : DeviceProfileDao {
     }
 }
 
-/** Logger com os três DAOs falsos — o construtor real exige os três. */
+/** Logger com os DAOs falsos — o construtor real exige todos. */
 private fun fakeLogger(dao: RoutingLogDao = FakeRoutingLogDao()) =
-    RoutingLogger(dao, FakeModelLoadLogDao(), FakeDeviceProfileDao())
+    RoutingLogger(dao, FakeModelLoadLogDao(), FakeDeviceProfileDao(), FakeBlockEnergyDao())
 
 private class FakeServerInferenceService : ServerInferenceService(ServerConfig()) {
     var reachable: Boolean = true

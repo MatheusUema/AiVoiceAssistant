@@ -365,7 +365,13 @@ class InferenceRouter @Inject constructor(
             text = cleanResponse(raw),
             source = InferenceSource.LOCAL,
             latencyMs = latency,
-            telemetry = telemetry
+            telemetry = telemetry,
+            // O tier local passou a expor logprobs (mesma fórmula do servidor), então a
+            // confiança deixa de ser -1 aqui. Isso **não** liga escalonamento por
+            // confiança no caminho local: `resolveRoute` decide a rota antes de gerar,
+            // e a política de escalonamento por confiança é do tier servidor. Aqui o
+            // valor é para o log — mudar a política é decisão à parte, com dados.
+            confidence = telemetry?.confidence ?: InferenceResult.CONFIDENCE_UNAVAILABLE
         )
     }
 

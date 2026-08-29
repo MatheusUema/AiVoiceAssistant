@@ -103,6 +103,13 @@ struct llama_session {
     int32_t n_reasoning_tokens = 0;
 
     /**
+     * Soma das probabilidades dos tokens escolhidos, e quantas posições entraram nela.
+     * A média das duas é a confiança — ver [accumulate_token_prob].
+     */
+    double  sum_token_prob   = 0.0;
+    int32_t n_token_prob     = 0;
+
+    /**
      * Texto do canal de raciocínio da última geração, separado da resposta.
      * O Gemma 4 raciocina antes de responder; sem separar, o "pensamento" chega ao aluno
      * como se fosse a resposta e os tokens dele se misturam aos da resposta em H3.
@@ -433,6 +440,52 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeCountTokens(JNIEnv * env, jobjec
 }
 
 /**
+ * Acumula a probabilidade do token escolhido nesta posição, para a confiança.
+ *
+ * A conta é `exp(logit[tok] - logsumexp(logits))` — o softmax da posição, avaliado no
+ * token que o sampler escolheu. **Não** é a probabilidade do token mais provável: com
+ * temperatura > 0 o sampler pode escolher outro, e registrar o topo mediria o que o
+ * modelo quase disse em vez do que disse. É a mesma definição do
+ * `ServerInferenceService.calculateConfidence` e da `app_confidence()` do artigo 1.
+ *
+ * Estabilidade numérica: subtrai o máximo antes de exponenciar. Sem isso, logits da
+ * ordem de +90 estouram o float (`exp(90)` ≈ 1e39) e a soma vira `inf`, devolvendo
+ * confiança 0 ou NaN — silenciosamente, porque o valor continua "plausível".
+ *
+ * Custo: uma passada sobre o vocabulário por token gerado (~150k floats no Qwen2.5).
+ * É desprezível ao lado do forward de 1,5 bilhão de parâmetros que produziu esses
+ * logits — medido no Device 1, abaixo do ruído entre execuções.
+ */
+void accumulate_token_prob(llama_session * s, llama_token tok) {
+    const float * logits = llama_get_logits_ith(s->ctx, -1);
+    if (logits == nullptr) {
+        return;
+    }
+    const llama_vocab * vocab   = llama_model_get_vocab(s->model);
+    const int           n_vocab = llama_vocab_n_tokens(vocab);
+    if (tok < 0 || tok >= n_vocab) {
+        return;
+    }
+
+    float max_logit = logits[0];
+    for (int i = 1; i < n_vocab; i++) {
+        if (logits[i] > max_logit) { max_logit = logits[i]; }
+    }
+
+    double sum_exp = 0.0;
+    for (int i = 0; i < n_vocab; i++) {
+        sum_exp += std::exp(static_cast<double>(logits[i] - max_logit));
+    }
+    if (sum_exp <= 0.0) {
+        return;
+    }
+
+    const double prob = std::exp(static_cast<double>(logits[tok] - max_logit)) / sum_exp;
+    s->sum_token_prob += prob;
+    s->n_token_prob++;
+}
+
+/**
  * Geração completa (bloqueante) para um prompt único.
  * Cada chamada é independente: o KV-cache é limpo no início, espelhando a semântica
  * de sessão efêmera que o MediaPipe tinha, para não misturar histórico entre questões.
@@ -454,6 +507,8 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeGenerate(
 
     s->ttft_ms = s->prefill_ms = s->decode_ms = s->total_ms = kUnavailable;
     s->n_prompt_tokens = s->n_gen_tokens = s->n_reasoning_tokens = 0;
+    s->sum_token_prob = 0.0;
+    s->n_token_prob = 0;
     s->last_reasoning.clear();
     s->was_cancelled = false;
     s->cancel_requested.store(false, std::memory_order_relaxed);
@@ -545,6 +600,15 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeGenerate(
         }
 
         const llama_token tok = common_sampler_sample(sampler, s->ctx, -1);
+
+        // Confiança: probabilidade do token **efetivamente escolhido**, lida ANTES do
+        // accept (que altera o estado do sampler). Mesma definição do
+        // `ServerInferenceService.calculateConfidence` e da `app_confidence()` do
+        // artigo 1 — média de exp(logprob) sobre as posições geradas. Precisa ser a
+        // mesma conta nos dois tiers, senão comparar confiança local × servidor mede a
+        // diferença entre as fórmulas em vez da diferença entre os modelos.
+        accumulate_token_prob(s, tok);
+
         common_sampler_accept(sampler, tok, true);
 
         if (i == 0) {
@@ -666,13 +730,13 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeGenerate(
  */
 JNIEXPORT jdoubleArray JNICALL
 Java_com_voiceassistant_llama_LlamaBridge_nativeLastStats(JNIEnv * env, jobject /*thiz*/, jlong handle) {
-    constexpr int kStatsLen = 10;
+    constexpr int kStatsLen = 11;
     jdoubleArray result = env->NewDoubleArray(kStatsLen);
     if (result == nullptr) {
         return nullptr;
     }
     auto * s = as_session(handle);
-    double values[kStatsLen] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+    double values[kStatsLen] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
     if (s != nullptr) {
         values[0] = s->ttft_ms;
         values[1] = s->prefill_ms;
@@ -684,6 +748,12 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeLastStats(JNIEnv * env, jobject 
         values[7] = s->supports_thinking ? 1 : 0;
         values[8] = s->stopped_at_eog ? 1 : 0;
         values[9] = s->was_cancelled ? 1 : 0;
+        // -1 (indisponível) quando nenhuma posição foi medida — geração vazia ou
+        // cancelada antes do primeiro token. Nunca 0, que a análise leria como
+        // "o modelo respondeu com confiança nula".
+        values[10] = (s->n_token_prob > 0)
+                ? s->sum_token_prob / s->n_token_prob
+                : kUnavailable;
     }
     env->SetDoubleArrayRegion(result, 0, kStatsLen, values);
     return result;

@@ -3,7 +3,11 @@ package com.voiceassistant.feature_benchmark
 import android.content.Context
 import android.os.PowerManager
 import android.util.Log
+import com.voiceassistant.ai_local.service.LocalInferenceService
+import com.voiceassistant.core.device.DeviceProfileProvider
+import com.voiceassistant.core.logging.BlockEnergyEntry
 import com.voiceassistant.core.logging.RoutingLogDao
+import com.voiceassistant.core.logging.RoutingLogger
 import com.voiceassistant.core.model.InferenceRequest
 import com.voiceassistant.core.model.PromptComplexity
 import com.voiceassistant.core.telemetry.BlockEnergy
@@ -40,7 +44,12 @@ class BenchmarkRunner @Inject constructor(
     private val promptBuilder: EnemPromptBuilder,
     private val inferenceRepository: InferenceRepository,
     private val energyMeter: EnergyMeter,
-    private val routingLogDao: RoutingLogDao
+    private val routingLogDao: RoutingLogDao,
+    private val routingLogger: RoutingLogger,
+    private val deviceProfileProvider: DeviceProfileProvider,
+    // Para registrar na `block_energy` qual modelo de fato respondeu — se o fallback
+    // assumiu, é dele a energia medida.
+    private val localService: LocalInferenceService
 ) {
     private val _progress = MutableStateFlow<BenchmarkProgress>(BenchmarkProgress.Idle)
     val progress: StateFlow<BenchmarkProgress> = _progress.asStateFlow()
@@ -92,6 +101,18 @@ class BenchmarkRunner @Inject constructor(
         // frios, e entraria na média como se fosse custo normal.
         runWarmup(config, questions.first())
 
+        // O warm-up acabou de gravar linhas — se elas não estão lá, nada do que vier
+        // depois estará. Abortar aqui custa 30 segundos; descobrir no fim custou uma
+        // coleta inteira: 242 inferências, 2 horas e metade da bateria do aparelho
+        // rodaram gravando em nada, porque `logRouting` engole exceções de escrita (o
+        // que é correto no app: uma falha de log não pode derrubar a resposta do aluno)
+        // e o banco recusava toda operação por divergência de schema.
+        verificarPersistencia()?.let { motivo ->
+            _progress.value = BenchmarkProgress.Failed(motivo)
+            Log.e(TAG, "Bateria abortada: $motivo")
+            return BenchmarkReport(config, emptyList(), listOf(motivo))
+        }
+
         val plan = buildPlan(questions, config)
         val blocks = mutableListOf<BlockEnergy>()
         val errors = mutableListOf<String>()
@@ -129,6 +150,7 @@ class BenchmarkRunner @Inject constructor(
 
             val energy = energyMeter.between(energyStart, energyMeter.snapshot(), block.size)
             blocks += energy
+            persistBlockEnergy(blockId, energy, config)
             Log.i(
                 TAG,
                 "Bloco $blockId: ${block.size} questões, ${energy.consumedUah}µAh " +
@@ -148,6 +170,69 @@ class BenchmarkRunner @Inject constructor(
         Log.i(TAG, "Respostas: $responses")
         return BenchmarkReport(config, blocks, errors, responses)
     }
+
+    /**
+     * Grava a energia do bloco na tabela, e não só no relatório em memória.
+     *
+     * Antes disto o valor existia apenas no logcat: na coleta do Device 1 três dos doze
+     * blocos se perderam quando o buffer rotacionou, e recuperá-los exigiria repetir
+     * duas horas de medição. O `blockId` é a chave de join com a `routing_log`, que já
+     * o registra em cada questão.
+     */
+    private suspend fun persistBlockEnergy(
+        blockId: String,
+        energy: BlockEnergy,
+        config: BenchmarkConfig
+    ) {
+        routingLogger.logBlockEnergy(
+            BlockEnergyEntry(
+                blockId = blockId,
+                deviceId = deviceProfileProvider.deviceId(),
+                // O modelo que de fato respondeu, não o configurado — se o fallback
+                // assumiu, é dele a energia medida.
+                modelId = localService.loadedModelId.orEmpty(),
+                scenario = config.scenario,
+                questions = energy.questions,
+                chargeStartUah = energy.startChargeUah,
+                chargeEndUah = energy.endChargeUah,
+                energyUahTotal = energy.consumedUah,
+                energyUahPerQuestion = energy.perQuestionUah,
+                capacityStartPercent = energy.startCapacityPercent,
+                capacityEndPercent = energy.endCapacityPercent,
+                tempStartCelsius = energy.startTemperatureCelsius,
+                tempEndCelsius = energy.endTemperatureCelsius,
+                deltaTempCelsius = energy.temperatureDeltaCelsius,
+                timestampStart = energy.startMs,
+                timestampEnd = energy.endMs,
+                charging = energy.charging,
+                valid = energy.isValid
+            )
+        )
+    }
+
+    /**
+     * Confere que a `routing_log` está mesmo recebendo linhas.
+     *
+     * @return o motivo da falha, ou null se a gravação está funcionando.
+     */
+    private suspend fun verificarPersistencia(): String? =
+        runCatching {
+            val linhas = routingLogDao.count()
+            if (linhas > 0) {
+                Log.i(TAG, "Persistência verificada: $linhas linhas na routing_log")
+                null
+            } else {
+                // O warm-up rodou e não gravou nada. Sem exceção visível, porque quem
+                // grava captura os erros — então o sintoma é a tabela vazia.
+                "o warm-up não gravou nenhuma linha na routing_log; a coleta produziria " +
+                    "medições que não seriam salvas (ver avisos de InferenceRouter no logcat)"
+            }
+        }.getOrElse { erro ->
+            // O caso real: divergência de schema faz o Room recusar toda operação.
+            "não foi possível ler a routing_log (${erro.message}); " +
+                "banco provavelmente com schema divergente — limpe os dados do app ou " +
+                "corrija a migração antes de coletar"
+        }
 
     /**
      * Apura o **estado** das respostas coletadas — não a acurácia.
@@ -267,7 +352,16 @@ data class BenchmarkConfig(
     val shuffleBetweenRounds: Boolean = true,
 
     /** Seed da amostra: a mesma seleção em todos os aparelhos e modelos. */
-    val sampleSeed: Long = EnemDataset.DEFAULT_SEED
+    val sampleSeed: Long = EnemDataset.DEFAULT_SEED,
+
+    /**
+     * Cenário declarado da coleta ("local-only", "lan", "internet").
+     *
+     * Vai para a `block_energy` porque a energia por questão só é comparável entre
+     * execuções do mesmo cenário: escalar para a nuvem troca computação local por
+     * rádio, e os dois custam de formas diferentes.
+     */
+    val scenario: String = "local-only"
 )
 
 /** Resumo da bateria. As linhas por questão ficam na `routing_log`. */

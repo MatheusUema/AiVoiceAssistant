@@ -37,7 +37,10 @@ class CsvExportTest {
     fun setUp() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).build()
-        logger = RoutingLogger(db.routingLogDao(), db.modelLoadLogDao(), db.deviceProfileDao())
+        logger = RoutingLogger(
+            db.routingLogDao(), db.modelLoadLogDao(),
+            db.deviceProfileDao(), db.blockEnergyDao()
+        )
         deviceProfile = DeviceProfileProvider(context, db.deviceProfileDao())
     }
 
@@ -101,7 +104,7 @@ class CsvExportTest {
         )
 
         val csvs = logger.exportAll()
-        assertEquals(4, csvs.size)
+        assertEquals(5, csvs.size)
         csvs.forEach { (name, content) -> Log.i(TAG, "── $name ──\n$content") }
 
         // Cada arquivo tem cabeçalho + exatamente uma linha de dados.

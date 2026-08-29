@@ -2,6 +2,7 @@ package com.voiceassistant.di
 
 import android.content.Context
 import androidx.room.Room
+import com.voiceassistant.core.logging.BlockEnergyDao
 import com.voiceassistant.core.logging.DeviceProfileDao
 import com.voiceassistant.core.logging.ModelLoadLogDao
 import com.voiceassistant.core.logging.RoutingLogDao
@@ -47,4 +48,7 @@ object DatabaseModule {
 
     @Provides
     fun provideDeviceProfileDao(db: AppDatabase): DeviceProfileDao = db.deviceProfileDao()
+
+    @Provides
+    fun provideBlockEnergyDao(db: AppDatabase): BlockEnergyDao = db.blockEnergyDao()
 }

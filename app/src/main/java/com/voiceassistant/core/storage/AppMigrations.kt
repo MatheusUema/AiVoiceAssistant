@@ -124,6 +124,35 @@ object AppMigrations {
         }
     }
 
+    /**
+     * v4 → v5: tabela `block_energy`.
+     *
+     * Só cria tabela nova; a `routing_log` não é tocada, então a coleta já feita
+     * sobrevive intacta. Os blocos medidos antes desta versão não têm como ser
+     * recuperados — existiam apenas no logcat.
+     */
+    val MIGRATION_4_5 = object : Migration(4, 5) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `block_energy` (" +
+                    "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "`blockId` TEXT NOT NULL, `deviceId` TEXT NOT NULL, " +
+                    "`modelId` TEXT NOT NULL, `scenario` TEXT NOT NULL, " +
+                    "`questions` INTEGER NOT NULL, " +
+                    "`chargeStartUah` INTEGER NOT NULL, `chargeEndUah` INTEGER NOT NULL, " +
+                    "`energyUahTotal` INTEGER NOT NULL, " +
+                    "`energyUahPerQuestion` REAL NOT NULL, " +
+                    "`capacityStartPercent` INTEGER NOT NULL, " +
+                    "`capacityEndPercent` INTEGER NOT NULL, " +
+                    "`tempStartCelsius` REAL NOT NULL, `tempEndCelsius` REAL NOT NULL, " +
+                    "`deltaTempCelsius` REAL NOT NULL, " +
+                    "`timestampStart` INTEGER NOT NULL, `timestampEnd` INTEGER NOT NULL, " +
+                    "`charging` INTEGER NOT NULL, `valid` INTEGER NOT NULL)"
+            )
+        }
+    }
+
     /** Todas as migrações, na ordem — passe para o `Room.databaseBuilder`. */
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+    val ALL: Array<Migration> =
+        arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
 }

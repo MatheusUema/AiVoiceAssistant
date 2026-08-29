@@ -24,7 +24,8 @@ import javax.inject.Singleton
 class RoutingLogger @Inject constructor(
     private val dao: RoutingLogDao,
     private val modelLoadDao: ModelLoadLogDao,
-    private val deviceProfileDao: DeviceProfileDao
+    private val deviceProfileDao: DeviceProfileDao,
+    private val blockEnergyDao: BlockEnergyDao
 ) {
     suspend fun log(
         sessionId: String,
@@ -91,6 +92,18 @@ class RoutingLogger @Inject constructor(
                 isCorrect = isCorrect
             )
         )
+    }
+
+    /**
+     * Registra a energia de um bloco (H5).
+     *
+     * Falha de gravação é avisada e não propaga: perder a linha de energia é ruim, mas
+     * derrubar a bateria de medição no meio por causa dela é pior — as questões do bloco
+     * já estão na `routing_log`.
+     */
+    suspend fun logBlockEnergy(entry: BlockEnergyEntry) {
+        runCatching { blockEnergyDao.insert(entry) }
+            .onFailure { Log.w(TAG, "Falha ao registrar energia do bloco: ${it.message}") }
     }
 
     /** Registra uma tentativa de carga — inclusive as que falharam (H6/H7). */
@@ -245,12 +258,43 @@ class RoutingLogger @Inject constructor(
         }
     }
 
+    /** CSV da `block_energy` — uma linha por bloco, casável por `block_id`. */
+    suspend fun exportBlockEnergyCsv(): String {
+        val entries = blockEnergyDao.getAll()
+        return buildString {
+            append(BLOCK_ENERGY_HEADER)
+            for (e in entries) {
+                append('\n')
+                append(csv(e.blockId)).append(',')
+                append(csv(e.deviceId)).append(',')
+                append(csv(e.modelId)).append(',')
+                append(csv(e.scenario)).append(',')
+                append(e.questions).append(',')
+                append(e.chargeStartUah).append(',')
+                append(e.chargeEndUah).append(',')
+                append(e.energyUahTotal).append(',')
+                append(e.energyUahPerQuestion).append(',')
+                append(e.capacityStartPercent).append(',')
+                append(e.capacityEndPercent).append(',')
+                append(e.tempStartCelsius).append(',')
+                append(e.tempEndCelsius).append(',')
+                append(e.deltaTempCelsius).append(',')
+                append(e.timestampStart).append(',')
+                append(e.timestampEnd).append(',')
+                append(e.durationMs).append(',')
+                append(if (e.charging) 1 else 0).append(',')
+                append(if (e.valid) 1 else 0)
+            }
+        }
+    }
+
     /** Os CSVs de uma vez, prontos para gravar em arquivo. */
     suspend fun exportAll(): Map<String, String> = mapOf(
         "routing_log.csv" to exportCsv(),
         "model_load_log.csv" to exportModelLoadCsv(),
         "device_profile.csv" to exportDeviceProfileCsv(),
-        "answers.csv" to exportAnswersCsv()
+        "answers.csv" to exportAnswersCsv(),
+        "block_energy.csv" to exportBlockEnergyCsv()
     )
 
     /** Envolve em aspas e escapa aspas internas, neutralizando vírgulas e quebras de linha. */
@@ -279,6 +323,12 @@ class RoutingLogger @Inject constructor(
         private const val MODEL_LOAD_HEADER =
             "timestamp,device_id,model,model_size_bytes,load_ms,warmup_ms,outcome,reason," +
                 "runtime,abi,threads,context_size,backends,vulkan,total_ram_mb,available_ram_mb"
+
+        private const val BLOCK_ENERGY_HEADER =
+            "block_id,device_id,model,scenario,n_questions,charge_start_uah," +
+                "charge_end_uah,energy_uah_total,energy_uah_per_question," +
+                "capacity_start_pct,capacity_end_pct,temp_start_c,temp_end_c," +
+                "delta_temp_c,timestamp_start,timestamp_end,duration_ms,charging,valid"
 
         private const val DEVICE_PROFILE_HEADER =
             "device_id,label,manufacturer,model,device_name,android_version,api_level,soc," +

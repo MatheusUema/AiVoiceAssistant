@@ -59,6 +59,8 @@ class EnergyMeter @Inject constructor(
         return BlockEnergy(
             startMs = start.timestampMs,
             endMs = end.timestampMs,
+            startChargeUah = start.chargeCounterUah,
+            endChargeUah = end.chargeCounterUah,
             questions = questions,
             consumedUah = consumedUah,
             perQuestionUah = if (consumedUah > 0 && questions > 0) {
@@ -102,6 +104,9 @@ data class BatterySnapshot(
 data class BlockEnergy(
     val startMs: Long,
     val endMs: Long,
+    /** Contadores brutos, guardados para que a conta possa ser refeita sem recoletar. */
+    val startChargeUah: Long = -1L,
+    val endChargeUah: Long = -1L,
     val questions: Int,
     /** Consumo total em µAh. -1 se indisponível. */
     val consumedUah: Long,
