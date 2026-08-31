@@ -113,7 +113,19 @@ class BenchmarkRunner @Inject constructor(
             return BenchmarkReport(config, emptyList(), listOf(motivo))
         }
 
-        val plan = buildPlan(questions, config)
+        val plan = removerJaColetadas(buildPlan(questions, config), config)
+        if (plan.isEmpty()) {
+            _progress.value = BenchmarkProgress.Done(0, 0, 0)
+            Log.i(TAG, "Nada a coletar: o resume nao encontrou itens faltantes")
+            return BenchmarkReport(config, emptyList(), emptyList())
+        }
+        if (config.planOnly) {
+            // Ensaio: calcula o plano e para. Serve para conferir o conjunto faltante
+            // ANTES de comprometer horas de aparelho e uma carga de bateria.
+            Log.i(TAG, "planOnly: ${plan.size} itens seriam executados; encerrando sem inferir")
+            _progress.value = BenchmarkProgress.Done(0, plan.size, 0)
+            return BenchmarkReport(config, emptyList(), emptyList())
+        }
         val blocks = mutableListOf<BlockEnergy>()
         val errors = mutableListOf<String>()
         var completed = 0
@@ -169,6 +181,52 @@ class BenchmarkRunner @Inject constructor(
         Log.i(TAG, "Bateria concluída: $completed/${plan.size}, ${errors.size} falhas")
         Log.i(TAG, "Respostas: $responses")
         return BenchmarkReport(config, blocks, errors, responses)
+    }
+
+    /**
+     * Remove do plano o que a sessão [BenchmarkConfig.resumeFromSession] já coletou.
+     *
+     * Existe porque uma coleta pode morrer no meio — no Device 3 a bateria acabou com 94
+     * das 160 inferências feitas. Sem isto, retomar significaria repetir as 94 e gastar
+     * outra carga inteira; com isto, roda só o que falta.
+     *
+     * A chave é `(questionId, questionYear, runIndex)`, a mesma da análise. O ano não é
+     * opcional: no dataset são 540 linhas para 180 ids, cada um repetido nos três anos.
+     *
+     * O plano vem de [buildPlan], que depende apenas de `sampleSeed`, `questionsPerArea` e
+     * `repetitions` — então, com a mesma config, as questões restantes são exatamente as
+     * que faltam, na mesma ordem relativa.
+     *
+     * Se execuções distintas compartilharem o mesmo label (aconteceu no Device 3, com duas
+     * tentativas mortas pela MIUI gravando sob `dev3-qwen`), o conjunto "já coletado"
+     * inclui as linhas delas. Ali foi inofensivo — as chaves das tentativas mortas são
+     * subconjunto das da execução boa — mas em geral vale um label novo por execução.
+     */
+    private suspend fun removerJaColetadas(
+        plan: List<PlanItem>,
+        config: BenchmarkConfig
+    ): List<PlanItem> {
+        val sessao = config.resumeFromSession ?: return plan
+        val feitas = runCatching {
+            routingLogDao.getBySession(sessao)
+                .filter { (it.runIndex ?: -1) >= 0 }
+                .map { Triple(it.questionId, it.questionYear, it.runIndex) }
+                .toSet()
+        }.getOrElse { erro ->
+            // Falhar aqui e rodar tudo de novo seria pior que parar: a coleta duplicada
+            // gastaria a carga inteira do aparelho sem que ninguém percebesse.
+            Log.e(TAG, "Resume abortado: não foi possível ler '$sessao' (${erro.message})")
+            return emptyList()
+        }
+        val restante = plan.filterNot {
+            Triple(it.question.id, it.question.year, it.runIndex) in feitas
+        }
+        Log.i(
+            TAG,
+            "Resume de '$sessao': ${feitas.size} já coletadas, " +
+                    "${restante.size} de ${plan.size} restantes"
+        )
+        return restante
     }
 
     /**
@@ -361,7 +419,16 @@ data class BenchmarkConfig(
      * execuções do mesmo cenário: escalar para a nuvem troca computação local por
      * rádio, e os dois custam de formas diferentes.
      */
-    val scenario: String = "local-only"
+    val scenario: String = "local-only",
+
+    /**
+     * Se preenchido, roda **apenas** o que esta sessao ainda nao coletou.
+     * Ver [BenchmarkRunner.removerJaColetadas].
+     */
+    val resumeFromSession: String? = null,
+
+    /** Ensaio: calcula o plano, registra o tamanho e encerra sem inferir. */
+    val planOnly: Boolean = false
 )
 
 /** Resumo da bateria. As linhas por questão ficam na `routing_log`. */

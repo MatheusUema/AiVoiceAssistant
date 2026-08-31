@@ -88,7 +88,12 @@ class BenchmarkBatteryTest {
             blockSize = args.getString("blockSize")?.toIntOrNull() ?: 20,
             warmupRuns = args.getString("warmupRuns")?.toIntOrNull() ?: 1,
             cooldownBetweenBlocksMs =
-                args.getString("cooldownBlockMs")?.toLongOrNull() ?: 60_000L
+                args.getString("cooldownBlockMs")?.toLongOrNull() ?: 60_000L,
+            // Retomada: roda so o que a sessao indicada ainda nao coletou.
+            resumeFromSession = args.getString("resumeFrom"),
+            // Ensaio do plano, sem inferir -- para conferir o conjunto faltante antes
+            // de comprometer horas de aparelho.
+            planOnly = args.getString("planOnly")?.toBooleanStrictOrNull() ?: false
         )
         Log.i(TAG, "config: $config")
 
@@ -116,7 +121,10 @@ class BenchmarkBatteryTest {
         }
         Log.i(TAG, "CSVs exportados em ${exportDir.absolutePath}")
 
-        assertTrue("nenhum bloco executado", report.blocks.isNotEmpty())
+        // No ensaio (`planOnly`) nao ha bloco algum, e isso e o resultado esperado.
+        if (!config.planOnly) {
+            assertTrue("nenhum bloco executado", report.blocks.isNotEmpty())
+        }
     }
 
     private fun hasModel(context: android.content.Context): Boolean {
