@@ -1,5 +1,6 @@
 package com.voiceassistant.ai_server.service
 
+import android.os.SystemClock
 import android.util.Log
 import com.voiceassistant.BuildConfig
 import com.voiceassistant.ai_server.model.ServerConfig
@@ -119,39 +120,78 @@ open class ServerInferenceService @Inject constructor(
      */
     open suspend fun generateWithConfidence(prompt: String): ServerResult =
         withContext(Dispatchers.IO) {
-            val start = System.currentTimeMillis()
+            // SystemClock.elapsedRealtime() e nao System.currentTimeMillis().
+            //
+            // Este numero e o minuendo de H11 (latencia total menos o compute do
+            // servidor), entao qualquer patologia do relogio vira um H11 errado -- e as
+            // duas alternativas foram medidas falhando neste mesmo aparelho:
+            //   - CLOCK_MONOTONIC para de contar durante a suspensao, e o aparelho
+            //     suspende esperando a resposta: 4.556 ms medidos contra 6.851 ms reais.
+            //   - CLOCK_REALTIME (currentTimeMillis) salta numa sincronizacao NTP: uma
+            //     requisicao chegou a devolver duracao NEGATIVA.
+            // elapsedRealtime e CLOCK_BOOTTIME: monotonico E conta durante a suspensao.
+            val start = SystemClock.elapsedRealtime()
 
             // ensureApi() (construção do cliente) fica dentro do try para garantir o
             // contrato: qualquer falha vira ServerUnavailableException, que o router trata.
             val response = try {
-                ensureApi().completion(
+                val api = ensureApi()
+                // O chat template vem do PROPRIO modelo, pelo endpoint do servidor. O
+                // `/completion` recebe texto cru: sem esta etapa o modelo recebe a
+                // questao sem o wrapper que espera e responde noutro regime, o que
+                // tornaria o tier servidor incomparavel com o local (que aplica o
+                // template na ponte JNI) e com as rodadas de referencia.
+                val formatado = try {
+                    api.applyTemplate(
+                        ApplyTemplateRequest(listOf(ChatMessage("user", prompt)))
+                    ).prompt.ifBlank { prompt }
+                } catch (e: Exception) {
+                    // Servidor antigo sem /apply-template: degrada para o prompt cru em
+                    // vez de derrubar a inferencia, mas avisa — a comparabilidade cai.
+                    Log.w(TAG, "apply-template indisponivel (${e.message}); usando prompt cru")
+                    prompt
+                }
+                api.completion(
                     CompletionRequest(
-                        prompt = prompt,
+                        prompt = formatado,
                         nPredict = config.maxTokens,
                         temperature = config.temperature,
                         topP = config.topP,
                         topK = config.topK,
-                        nProbs = config.nProbs
+                        nProbs = config.nProbs,
+                        seed = config.randomSeed
                     )
                 )
             } catch (e: Exception) {
                 throw ServerUnavailableException("Erro ao conectar ao servidor: ${e.message}", e)
             }
 
-            val latency = System.currentTimeMillis() - start
+            val latency = SystemClock.elapsedRealtime() - start
             val confidence = calculateConfidence(response.completionProbabilities)
+            val t = response.timings
 
             Log.i(
                 TAG,
                 "SERVER: ${response.tokensPredicted} tokens, " +
-                    "confidence=${"%.3f".format(confidence)}, ${latency}ms"
+                    "confidence=${"%.3f".format(confidence)}, ${latency}ms" +
+                    (t?.let {
+                        " | servidor: prefill ${"%.0f".format(it.promptMs)}ms " +
+                            "decode ${"%.0f".format(it.predictedMs)}ms " +
+                            "-> rede ~${latency - (it.promptMs + it.predictedMs).toLong()}ms"
+                    } ?: " | sem timings")
             )
 
             ServerResult(
                 text = response.content,
                 confidence = confidence,
                 tokenCount = response.tokensPredicted,
-                latencyMs = latency
+                latencyMs = latency,
+                promptTokens = t?.promptN ?: response.tokensEvaluated,
+                generatedTokens = t?.predictedN ?: response.tokensPredicted,
+                ingestionMs = t?.promptMs ?: ServerResult.UNAVAILABLE,
+                generationMs = t?.predictedMs ?: ServerResult.UNAVAILABLE,
+                truncated = response.stopType == "limit",
+                baseUrl = configuredBaseUrl
             )
         }
 
@@ -197,6 +237,22 @@ open class ServerInferenceService @Inject constructor(
         private val JSON = Json {
             ignoreUnknownKeys = true
             isLenient = true
+
+            // encodeDefaults = true E OBRIGATORIO AQUI, e a ausencia dele era um bug
+            // silencioso. O kotlinx.serialization OMITE do JSON todo campo cujo valor
+            // seja igual ao default declarado. Como `CompletionRequest` declara
+            // `nProbs = 5`, `seed = 42` e `cachePrompt = false`, os tres sumiam do corpo
+            // sempre que o valor coincidia com o default -- que e o caso normal.
+            //
+            // As consequencias eram todas invisiveis no codigo e visiveis so nos dados:
+            //   - sem `n_probs`, o servidor nao devolve `completion_probabilities`, e a
+            //     confianca do tier servidor saia -1 SEMPRE. O tier existe justamente
+            //     por expor logprobs, e nunca os recebia.
+            //   - sem `seed`, o servidor sorteia uma por requisicao: a mesma questao
+            //     dava textos diferentes a cada chamada.
+            //   - sem `cache_prompt`, vale o default do servidor (true), e uma questao
+            //     herdava KV-cache da anterior -- a ordem virava variavel oculta.
+            encodeDefaults = true
         }
     }
 }
@@ -209,8 +265,37 @@ data class ServerResult(
     val text: String,
     val confidence: Float,
     val tokenCount: Int,
-    val latencyMs: Long
-)
+    val latencyMs: Long,
+    /**
+     * Telemetria vinda do bloco `timings` do servidor. Antes de 2026-09-05 nada disto
+     * existia e o tier servidor gravava -1 em todas as colunas de custo da
+     * `routing_log`: respondia, mas nao era mensuravel.
+     */
+    val promptTokens: Int = UNAVAILABLE_INT,
+    val generatedTokens: Int = UNAVAILABLE_INT,
+    val ingestionMs: Double = UNAVAILABLE,
+    val generationMs: Double = UNAVAILABLE,
+    val truncated: Boolean = false,
+    val baseUrl: String? = null
+) {
+    /** Compute que o servidor reporta: prefill + decode, em ms. -1 se indisponivel. */
+    val computeMs: Double
+        get() = if (ingestionMs >= 0 && generationMs >= 0) ingestionMs + generationMs
+                else UNAVAILABLE
+
+    /**
+     * H11 — o que sobrou depois de descontar o compute: rede, HTTP e serializacao.
+     * Duracao menos duracao, ambas do lado do cliente (a segunda vem no corpo da
+     * resposta como duracao, nao como timestamp). Nenhum relogio e cruzado.
+     */
+    val networkMs: Double
+        get() = if (computeMs >= 0) latencyMs - computeMs else UNAVAILABLE
+
+    companion object {
+        const val UNAVAILABLE = -1.0
+        const val UNAVAILABLE_INT = -1
+    }
+}
 
 /** Servidor não inicializado ou inacessível (rede, timeout, erro HTTP). */
 class ServerUnavailableException(

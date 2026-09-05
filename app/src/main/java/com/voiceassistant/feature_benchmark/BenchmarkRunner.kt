@@ -206,16 +206,23 @@ class BenchmarkRunner @Inject constructor(
         plan: List<PlanItem>,
         config: BenchmarkConfig
     ): List<PlanItem> {
-        val sessao = config.resumeFromSession ?: return plan
+        val sessoes = config.resumeFromSession
+            ?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }
+            ?: return plan
+        if (sessoes.isEmpty()) return plan
         val feitas = runCatching {
-            routingLogDao.getBySession(sessao)
+            // Aceita VÁRIAS sessões separadas por vírgula: uma coleta interrompida e
+            // retomada fica espalhada por mais de um label (no Device 3, `dev3-qwen`
+            // + `dev3-qwen-resume`). Considerar só uma delas faria o plano incluir de
+            // novo o que a outra já coletou.
+            sessoes.flatMap { routingLogDao.getBySession(it) }
                 .filter { (it.runIndex ?: -1) >= 0 }
                 .map { Triple(it.questionId, it.questionYear, it.runIndex) }
                 .toSet()
         }.getOrElse { erro ->
             // Falhar aqui e rodar tudo de novo seria pior que parar: a coleta duplicada
             // gastaria a carga inteira do aparelho sem que ninguém percebesse.
-            Log.e(TAG, "Resume abortado: não foi possível ler '$sessao' (${erro.message})")
+            Log.e(TAG, "Resume abortado: não foi possível ler $sessoes (${erro.message})")
             return emptyList()
         }
         val restante = plan.filterNot {
@@ -223,7 +230,7 @@ class BenchmarkRunner @Inject constructor(
         }
         Log.i(
             TAG,
-            "Resume de '$sessao': ${feitas.size} já coletadas, " +
+            "Resume de $sessoes: ${feitas.size} já coletadas, " +
                     "${restante.size} de ${plan.size} restantes"
         )
         return restante
@@ -422,7 +429,8 @@ data class BenchmarkConfig(
     val scenario: String = "local-only",
 
     /**
-     * Se preenchido, roda **apenas** o que esta sessao ainda nao coletou.
+     * Sessões já coletadas, separadas por vírgula. Se preenchido, roda **apenas**
+     * o que nenhuma delas gravou.
      * Ver [BenchmarkRunner.removerJaColetadas].
      */
     val resumeFromSession: String? = null,

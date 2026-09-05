@@ -33,7 +33,29 @@ interface LlamaServerApi {
 
     @POST("completion")
     suspend fun completion(@Body request: CompletionRequest): CompletionResponse
+
+    /**
+     * Aplica o chat template DO PROPRIO MODELO a uma conversa e devolve a string
+     * pronta para o `/completion`.
+     *
+     * Existe porque o `/completion` recebe texto cru: sem esta etapa o modelo recebe a
+     * questao sem o wrapper `<|im_start|>` que ele espera, e responde em outro regime.
+     * O tier local ja faz isso na ponte JNI (`common_chat_templates_apply`); usar o
+     * endpoint do servidor mantem os dois tiers no MESMO template, que e a condicao
+     * para o custo e a acuracia serem comparaveis entre eles.
+     */
+    @POST("apply-template")
+    suspend fun applyTemplate(@Body request: ApplyTemplateRequest): ApplyTemplateResponse
 }
+
+@Serializable
+data class ApplyTemplateRequest(val messages: List<ChatMessage>)
+
+@Serializable
+data class ChatMessage(val role: String, val content: String)
+
+@Serializable
+data class ApplyTemplateResponse(val prompt: String = "")
 
 @Serializable
 data class CompletionRequest(
@@ -43,14 +65,50 @@ data class CompletionRequest(
     @SerialName("top_p") val topP: Float = 0.9f,
     @SerialName("top_k") val topK: Int = 40,
     /** > 0 ativa o retorno dos logprobs em `completion_probabilities`. */
-    @SerialName("n_probs") val nProbs: Int = 5
+    @SerialName("n_probs") val nProbs: Int = 5,
+
+    /**
+     * Seed do amostrador. Espelha `LocalModelConfig.randomSeed` (42).
+     *
+     * Sem ela o servidor sorteia uma seed por requisicao, e a mesma questao produz
+     * textos diferentes a cada chamada -- o que impede comparar o tier servidor com as
+     * rodadas de referencia e destroi a reprodutibilidade que o estudo depende. 0
+     * significa aleatorio, como no tier local.
+     */
+    val seed: Int = 42,
+
+    /**
+     * Reaproveitamento do KV-cache entre requisicoes. FALSE de proposito: o tier local
+     * limpa o cache a cada geracao, e deixar o servidor reaproveita-lo faria uma questao
+     * herdar estado da anterior. A ordem das questoes viraria uma variavel oculta.
+     */
+    @SerialName("cache_prompt") val cachePrompt: Boolean = false
 )
 
 @Serializable
 data class CompletionResponse(
     val content: String = "",
     @SerialName("tokens_predicted") val tokensPredicted: Int = 0,
-    @SerialName("completion_probabilities") val completionProbabilities: List<TokenProb>? = null
+    @SerialName("tokens_evaluated") val tokensEvaluated: Int = 0,
+    @SerialName("stop_type") val stopType: String? = null,
+    @SerialName("completion_probabilities") val completionProbabilities: List<TokenProb>? = null,
+    /**
+     * Bloco de tempos do servidor. Era DESCARTADO ate 2026-09-05, e por isso toda linha
+     * do tier servidor na `routing_log` saia com ingestao, geracao e tokens em -1 --
+     * o tier respondia mas nao era mensuravel. E tambem o que permite calcular H11
+     * (latencia de rede): o cliente cronometra o total, o servidor informa o compute, e
+     * a diferenca e a rede. Sem estes campos essa subtracao e impossivel.
+     */
+    val timings: Timings? = null
+)
+
+/** Durações que o `llama-server` reporta por requisição. Nomes do llama.cpp. */
+@Serializable
+data class Timings(
+    @SerialName("prompt_n") val promptN: Int = 0,
+    @SerialName("prompt_ms") val promptMs: Double = 0.0,
+    @SerialName("predicted_n") val predictedN: Int = 0,
+    @SerialName("predicted_ms") val predictedMs: Double = 0.0
 )
 
 /**

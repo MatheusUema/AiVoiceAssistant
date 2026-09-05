@@ -62,24 +62,62 @@ class BenchmarkBatteryTest {
         entryPoint.userSettings().setPrivacyMode(localOnly)
         Log.i(TAG, "modo privacidade (só tier local) = $localOnly")
 
-        // O modelo é carregado pela Application; esperar é obrigatório, senão as
-        // primeiras questões iriam para a nuvem e mediriam o tier errado.
-        val manager = entryPoint.localModelManager()
-        manager.initializeAsync()
-        val ready = withTimeoutOrNull(MODEL_LOAD_TIMEOUT_MS) {
-            manager.modelState.first { state ->
-                if (state is ModelState.Error) {
-                    throw AssertionError("carga do modelo falhou: ${state.message}")
-                }
-                state is ModelState.Ready
+        // Tier servidor (H11): mede a latência de rede da LAN, que é a diferença entre o
+        // que o app cronometra e o `timings` que o próprio servidor reporta. Só faz
+        // sentido com `localOnly=false` — em modo privacidade o roteador nunca sai do
+        // aparelho (InferenceRouter, regras 1-2).
+        //
+        // Os dois valores vão para `UserSettings`, que é a fonte de verdade em runtime;
+        // o `ServerConfig` só entra como fallback da URL. Sem estes argumentos não havia
+        // como apontar o tier servidor sem recompilar, e a coleta de H11 ficava
+        // impossível de armar por instrumentação.
+        val serverTier = args.getString("serverTier")?.toBooleanStrictOrNull() ?: false
+        val serverUrl = args.getString("serverUrl")?.trim().orEmpty()
+        if (serverTier) {
+            require(!localOnly) {
+                "serverTier=true exige localOnly=false: em modo privacidade o roteador " +
+                    "força LOCAL e a coleta mediria o tier errado em silêncio"
             }
+            require(serverUrl.isNotBlank()) {
+                "serverTier=true exige -e serverUrl http://<ip-do-servidor>:8080; sem ela " +
+                    "o roteador usaria a URL de fallback do ServerConfig e bateria no " +
+                    "servidor errado (ou em nenhum)"
+            }
+            entryPoint.userSettings().setServerBaseUrl(serverUrl)
         }
-        assertTrue(
-            "modelo local não ficou pronto em ${MODEL_LOAD_TIMEOUT_MS / 1000}s: " +
-                    "${manager.modelState.value}",
-            ready != null
-        )
-        Log.i(TAG, "modelo pronto: ${manager.activeVariant?.label}")
+        entryPoint.userSettings().setServerTierEnabled(serverTier)
+        Log.i(TAG, "tier servidor = $serverTier" + if (serverTier) " em $serverUrl" else "")
+
+        // O modelo local é carregado pela Application; esperar é obrigatório quando ELE é
+        // o tier medido, senão as primeiras questões iriam para a nuvem e mediriam o tier
+        // errado.
+        //
+        // No tier servidor, não. A inferência roda no PC e o aparelho é só um cliente
+        // HTTP: exigir o modelo local aqui gastaria RAM e ~1 min de carga por nada e,
+        // num aparelho apertado como o Redmi Note 8 (3,6 GB), poderia até degradar o
+        // cliente que se quer medir. Pior: bloquearia a coleta de H11 em qualquer
+        // aparelho sem o GGUF instalado — que foi exatamente o que aconteceu depois de
+        // reinstalar o APK, quando o modelo saiu do `filesDir`.
+        if (serverTier) {
+            Log.i(TAG, "tier servidor: pulando a carga do modelo local (não é o tier medido)")
+        } else {
+            val manager = entryPoint.localModelManager()
+            manager.initializeAsync()
+            val ready = withTimeoutOrNull(MODEL_LOAD_TIMEOUT_MS) {
+                manager.modelState.first { state ->
+                    if (state is ModelState.Error) {
+                        throw AssertionError("carga do modelo falhou: ${state.message}")
+                    }
+                    state is ModelState.Ready
+                }
+            }
+            assertTrue(
+                "modelo local não ficou pronto em ${MODEL_LOAD_TIMEOUT_MS / 1000}s: " +
+                        "${manager.modelState.value}",
+                ready != null
+            )
+            Log.i(TAG, "modelo pronto: ${manager.activeVariant?.label}")
+        }
 
         val config = BenchmarkConfig(
             runLabel = args.getString("label") ?: DEFAULT_LABEL,

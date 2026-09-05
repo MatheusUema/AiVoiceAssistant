@@ -24,6 +24,13 @@ val localModelFallback: String =
 //   ./gradlew :app:assembleDebug -Plocal.maxtokens=4
 val localMaxTokens: String = providers.gradleProperty("local.maxtokens").getOrElse("1024")
 
+// Tempo maximo por geracao no tier local. 180 s serve aos aparelhos que rodam o
+// modelo em RAM; o Device 2 (Redmi Note 8, 3,6 GB) pagina os pesos em swap e gasta
+// ate 144 s so no prefill, entao com 180 s a maioria das questoes e cancelada antes
+// de responder -- o que mede o teto, nao o aparelho.
+//   ./gradlew :app:assembleDebug -Plocal.timeout=300000
+val localTimeoutMs: String = providers.gradleProperty("local.timeout").getOrElse("180000")
+
 android {
     namespace = "com.voiceassistant"
     compileSdk = 35
@@ -45,6 +52,7 @@ android {
         buildConfigField("String", "LOCAL_MODEL", "\"$localModel\"")
         buildConfigField("String", "LOCAL_MODEL_FALLBACK", "\"$localModelFallback\"")
         buildConfigField("int", "LOCAL_MAX_TOKENS", localMaxTokens)
+        buildConfigField("long", "LOCAL_TIMEOUT_MS", localTimeoutMs + "L")
     }
 
     buildTypes {

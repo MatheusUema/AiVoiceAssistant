@@ -9,6 +9,7 @@ import com.voiceassistant.ai_local.model.LocalModelConfig
 import com.voiceassistant.ai_server.model.ServerConfig
 import com.voiceassistant.ai_server.service.ServerInferenceService
 import com.voiceassistant.ai_server.service.ServerResult
+import com.voiceassistant.core.model.InferenceTelemetry
 import com.voiceassistant.ai_server.service.ServerUnavailableException
 import com.voiceassistant.core.device.DeviceProfileProvider
 import com.voiceassistant.core.logging.RoutingLogger
@@ -493,11 +494,32 @@ class InferenceRouter @Inject constructor(
         }
     }
 
+    /**
+     * Converte o resultado do tier servidor, AGORA COM TELEMETRIA.
+     *
+     * Ate 2026-09-05 esta funcao devolvia so texto, latencia e confianca, e o
+     * `InferenceResult.telemetry` ficava null -- o que fazia toda linha do tier servidor
+     * na `routing_log` sair com ingestao, geracao, tokens e tokens/s em -1. O tier
+     * respondia, mas era invisivel para a analise de custo, e H11 (latencia de rede)
+     * era impossivel de calcular: falta o compute do servidor para subtrair.
+     */
     private fun serverResult(result: ServerResult): InferenceResult = InferenceResult(
         text = cleanResponse(result.text),
         source = InferenceSource.SERVER,
         latencyMs = result.latencyMs,
-        confidence = result.confidence
+        confidence = result.confidence,
+        telemetry = InferenceTelemetry(
+            modelId = result.baseUrl?.let { "llama-server@$it" },
+            runtime = "llama-server",
+            promptTokens = result.promptTokens,
+            generatedTokens = result.generatedTokens,
+            // O `/completion` nao-streaming nao expoe TTFT: o corpo so chega inteiro. O
+            // prefill e o melhor limite inferior disponivel, e e o que o tier local
+            // chama de ingestao — deixa-lo como TTFT seria inventar precisao.
+            ingestionMs = result.ingestionMs,
+            generationMs = result.generationMs,
+            truncated = result.truncated
+        )
     )
 
     /**

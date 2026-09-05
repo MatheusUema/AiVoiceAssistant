@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SOBRESCRITA DO BUILD DEBUG. O arquivo de `src/main` mantém
+  `cleartextTrafficPermitted="false"`, e produção continua endurecida; o Gradle
+  substitui este recurso apenas na variante debug.
+
+  POR QUE ISTO EXISTE: o tier servidor é um `llama-server` na LAN, que fala HTTP puro.
+  Com a política global de `src/main`, toda requisição em texto claro é bloqueada pela
+  plataforma — inclusive o health-check —, então `isServerReachable()` devolve false e o
+  `InferenceRouter` nunca escolhe SERVER. O sintoma é traiçoeiro: não há erro de
+  conexão, o roteamento simplesmente cai para outro tier e a medição sai do lugar
+  errado. Foi exatamente o que aconteceu na primeira tentativa de coletar H11: as 80
+  questões saíram com `route=CLOUD`, `finalTier=LOCAL`, sem tokens e em 174 ms.
+
+  ISTO NÃO É SÓ UM AJUSTE DE BENCHMARK. Enquanto o app for distribuído com a política de
+  `src/main`, o tier servidor não funciona em release — um servidor de escola na LAN
+  precisaria de HTTPS com certificado confiável, ou de uma entrada explícita por domínio
+  aqui. É uma decisão de implantação a tomar, e está registrada em
+  `08-achados-consolidados.md`.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
