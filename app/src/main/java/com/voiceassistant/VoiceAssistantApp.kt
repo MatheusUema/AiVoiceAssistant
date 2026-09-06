@@ -26,6 +26,9 @@ class VoiceAssistantApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Antes do primeiro uso do tier de nuvem: o Firebase AI Logic exige App Check.
+        // A implementacao varia por variante (debug/release) — ver AppCheckInitializer.
+        AppCheckInitializer.install(this)
         localModelManager.initializeAsync()
     }
 }

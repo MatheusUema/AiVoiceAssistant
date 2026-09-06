@@ -8,6 +8,7 @@ import com.voiceassistant.ai_cloud.model.CloudModelConfig
 import com.voiceassistant.ai_local.model.LocalModelConfig
 import com.voiceassistant.ai_server.model.ServerConfig
 import com.voiceassistant.ai_server.service.ServerInferenceService
+import com.voiceassistant.ai_cloud.service.CloudResult
 import com.voiceassistant.ai_server.service.ServerResult
 import com.voiceassistant.core.model.InferenceTelemetry
 import com.voiceassistant.ai_server.service.ServerUnavailableException
@@ -377,11 +378,9 @@ class InferenceRouter @Inject constructor(
     }
 
     private suspend fun runCloud(prompt: String): InferenceResult {
-        val start = System.currentTimeMillis()
-        val raw = cloudService.generate(prompt)
-        val latency = System.currentTimeMillis() - start
-        Log.i(TAG, "CLOUD concluído em ${latency}ms")
-        return InferenceResult(text = cleanResponse(raw), source = InferenceSource.CLOUD, latencyMs = latency)
+        val r = cloudService.generate(prompt)
+        Log.i(TAG, "CLOUD concluído em ${r.latencyMs}ms")
+        return cloudResult(r, InferenceSource.CLOUD)
     }
 
     private suspend fun runLocalWithCloudFallback(prompt: String): InferenceResult {
@@ -390,15 +389,9 @@ class InferenceRouter @Inject constructor(
         } catch (localError: Exception) {
             Log.w(TAG, "FALLBACK: local falhou (${localError.message}), tentando cloud")
             try {
-                val start = System.currentTimeMillis()
-                val raw = cloudService.generate(prompt)
-                val latency = System.currentTimeMillis() - start
-                Log.i(TAG, "FALLBACK→CLOUD concluído em ${latency}ms")
-                InferenceResult(
-                    text = cleanResponse(raw),
-                    source = InferenceSource.FALLBACK,
-                    latencyMs = latency
-                )
+                val r = cloudService.generate(prompt)
+                Log.i(TAG, "FALLBACK→CLOUD concluído em ${r.latencyMs}ms")
+                cloudResult(r, InferenceSource.FALLBACK)
             } catch (cloudError: Exception) {
                 throw InferenceUnavailableException(
                     "Local: ${localError.message} | Cloud: ${cloudError.message}"
@@ -462,11 +455,9 @@ class InferenceRouter @Inject constructor(
                 .onFailure { Log.w(TAG, "Fallback local falhou: ${it.message}") }
         }
         if (cloudService.isAvailable) {
-            val start = System.currentTimeMillis()
-            val raw = cloudService.generate(prompt)
-            val latency = System.currentTimeMillis() - start
-            Log.i(TAG, "SERVER→FALLBACK cloud concluído em ${latency}ms")
-            return InferenceResult(cleanResponse(raw), InferenceSource.FALLBACK, latency)
+            val r = cloudService.generate(prompt)
+            Log.i(TAG, "SERVER→FALLBACK cloud concluído em ${r.latencyMs}ms")
+            return cloudResult(r, InferenceSource.FALLBACK)
         }
         throw InferenceUnavailableException(
             "Servidor indisponível e nenhum fallback (local/cloud) disponível."
@@ -503,6 +494,33 @@ class InferenceRouter @Inject constructor(
      * respondia, mas era invisivel para a analise de custo, e H11 (latencia de rede)
      * era impossivel de calcular: falta o compute do servidor para subtrair.
      */
+    /**
+     * Converte o resultado do tier cloud, COM TELEMETRIA.
+     *
+     * Ate 2026-09-05 o tier cloud devolvia so texto e latencia, e a `routing_log` saia com
+     * tokens e tempos em -1. As contagens vem do `usageMetadata` da API e sao o unico
+     * sinal de custo que ela oferece -- e o que permite estimar custo por questao.
+     *
+     * `ingestionMs`/`generationMs` ficam indisponiveis de proposito: a API nao separa
+     * prefill de decode, e inventar a divisao a partir da latencia total seria fabricar
+     * um numero. A CONFIANCA tambem fica sem sinal (o SDK nao expoe logprobs), e o
+     * `confidenceMethod` grava "none" -- nao um -1 que pareceria medicao falha.
+     */
+    private fun cloudResult(r: CloudResult, fonte: InferenceSource): InferenceResult =
+        InferenceResult(
+            text = cleanResponse(r.text),
+            source = fonte,
+            latencyMs = r.latencyMs,
+            telemetry = InferenceTelemetry(
+                modelId = r.modelId ?: cloudModelConfig.modelName,
+                runtime = "firebase-ai",
+                promptTokens = r.promptTokens,
+                generatedTokens = r.generatedTokens,
+                reasoningTokens = r.reasoningTokens,
+                truncated = r.truncated
+            )
+        )
+
     private fun serverResult(result: ServerResult): InferenceResult = InferenceResult(
         text = cleanResponse(result.text),
         source = InferenceSource.SERVER,

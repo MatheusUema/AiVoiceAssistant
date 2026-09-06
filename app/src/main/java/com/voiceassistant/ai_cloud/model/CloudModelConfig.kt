@@ -15,16 +15,37 @@ data class CloudModelConfig(
      *  - "gemini-1.5-flash"      → geração anterior, quota gratuita estável
      *  - "gemini-1.5-pro"        → melhor qualidade, mais lento
      */
-    val modelName: String = "gemini-2.0-flash-lite",
+    // MODELO: confirmado na lista que o Firebase AI Logic expoe para o backend
+    // `googleAI` (Gemini Developer API) em 2026-09. NAO existe um `gemini-3-flash`
+    // estavel; a familia suportada e gemini-3.7-flash / 3.6-flash / 3.5-flash /
+    // 3.5-flash-lite / 3.1-flash-lite. Escolhido o 3.7-flash por ser o Flash de uso
+    // geral mais recente da lista.
+    //
+    // FREE TIER: modelos Flash e Flash-Lite NAO exigem o plano Blaze quando usados pela
+    // Gemini Developer API. Pro, imagem e TTS exigem billing -- por isso o tier cloud
+    // deste estudo fica na familia Flash.
+    //
+    // Trocar de modelo e uma linha; a comparabilidade do estudo depende de declarar qual
+    // foi usado, e o `modelId` viaja para a `routing_log` em cada linha.
+    val modelName: String = "gemini-3.7-flash",
 
     /** Máximo de tokens na resposta gerada */
     val maxOutputTokens: Int = 1024,
 
     /** Temperatura (0.0 = determinístico, 1.0 = criativo) */
-    val temperature: Float = 0.7f,
+    // ALINHADO aos tiers local e servidor (0.2), para que a comparacao meça o modelo e
+    // nao o regime de amostragem.
+    val temperature: Float = 0.2f,
 
     /** Nucleus sampling — filtra tokens cuja probabilidade acumulada ultrapassa topP */
-    val topP: Float = 0.95f,
+    // topP alinhado ao dos outros tiers (0.85).
+    //
+    // DIFERENCA INEVITAVEL, e declarada: o `generationConfig` do SDK Firebase nao expoe
+    // `topK` da mesma forma que o llama.cpp, e a familia Gemini 3 faz raciocinio interno
+    // com orcamento proprio de tokens. Ou seja, os tres tiers ficam alinhados em
+    // temperatura e topP, mas NAO sao o mesmo amostrador. Isso limita o que se pode
+    // atribuir ao modelo numa comparacao cloud x local, e precisa constar da analise.
+    val topP: Float = 0.85f,
 
     /**
      * Nível de bloqueio de conteúdo sensível.

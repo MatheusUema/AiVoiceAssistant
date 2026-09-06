@@ -161,6 +161,11 @@ dependencies {
     // --- Firebase BOM + AI Logic (Gemini) ---
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.ai)
+    // App Check: o Firebase AI Logic passou a EXIGIR App Check imposto. Sem ele a API
+    // responde "Firebase AI Logic has been deactivated in this project". O provider de
+    // debug entra so na variante debug; release precisaria de Play Integrity.
+    implementation(libs.firebase.appcheck)
+    debugImplementation(libs.firebase.appcheck.debug)
     implementation(libs.firebase.analytics)
 
     // --- MediaPipe LLM Inference (inferência local) ---

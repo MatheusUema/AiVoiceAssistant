@@ -44,10 +44,21 @@ class BenchmarkBatteryTest {
         val args = InstrumentationRegistry.getArguments()
         val context = instrumentation.targetContext
 
-        assumeTrue(
-            "Nenhum GGUF no aparelho — envie um com scripts/push-model.ps1",
-            hasModel(context)
-        )
+        // O GGUF só é obrigatório quando o tier LOCAL é o medido. Ao medir o tier
+        // servidor ou o de nuvem, a inferência acontece fora do aparelho e exigir o
+        // modelo aqui pula a coleta inteira — em silêncio, porque `assumeTrue` marca o
+        // teste como aprovado. Foi exatamente o que aconteceu: depois de um `pm clear`
+        // apagar o `filesDir`, três execuções seguidas devolveram "OK (1 test)" em 23 ms
+        // sem rodar uma única questão.
+        val vaiParaFora = args.getString("serverTier")?.toBooleanStrictOrNull() ?: false
+        if (!vaiParaFora) {
+            assumeTrue(
+                "Nenhum GGUF no aparelho — envie um com scripts/push-model.ps1",
+                hasModel(context)
+            )
+        } else {
+            Log.i(TAG, "tier externo: GGUF local não é pré-requisito")
+        }
 
         val entryPoint = EntryPointAccessors.fromApplication(
             context.applicationContext,

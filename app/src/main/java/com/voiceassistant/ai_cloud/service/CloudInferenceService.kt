@@ -14,9 +14,16 @@ interface CloudInferenceService {
      * O prompt já vem formatado pelo [TutorPromptBuilder] com
      * instrução de sistema + histórico + pergunta do usuário.
      *
+     * DEVOLVE UM RESULTADO ESTRUTURADO, e nao so a String. Ate 2026-09-05 a assinatura
+     * era `suspend fun generate(prompt: String): String`, e o `usageMetadata` da resposta
+     * -- que traz as contagens de tokens -- era descartado DENTRO da implementacao, sem
+     * por onde trafegar. O efeito era que toda linha do tier cloud na `routing_log` saia
+     * com prefill, decode e tokens em -1: o tier respondia, mas nao era mensuravel.
+     * Corrigir isso exigia mudar a interface, nao so o ponto de chamada.
+     *
      * @throws CloudInferenceException em caso de erro de rede, API ou conteúdo bloqueado.
      */
-    suspend fun generate(prompt: String): String
+    suspend fun generate(prompt: String): CloudResult
 
     /**
      * True se o backend cloud está configurado no app (ex.: Firebase inicializado via
@@ -25,6 +32,41 @@ interface CloudInferenceService {
      * O InferenceRouter consulta isto antes de rotear para o cloud.
      */
     val isAvailable: Boolean
+}
+
+/**
+ * Resultado de uma geração no tier cloud, com o que a API informa sobre o custo.
+ *
+ * NAO HA CONFIANCA AQUI, e a ausencia e deliberada: o SDK do Firebase AI Logic nao expoe
+ * logprobs por token. O `InferenceRouter` registra `confidenceMethod = "none"` para este
+ * tier, e nao um -1 silencioso que pareceria uma medicao falha. Obter confianca exigiria
+ * sair do SDK e usar a API crua do Gemini (`responseLogprobs`), o que muda autenticacao.
+ */
+data class CloudResult(
+    val text: String,
+    val latencyMs: Long,
+    /** `usageMetadata.promptTokenCount` — tokens do prompt cobrados. */
+    val promptTokens: Int = UNAVAILABLE,
+    /** `usageMetadata.candidatesTokenCount` — tokens gerados. */
+    val generatedTokens: Int = UNAVAILABLE,
+    /**
+     * Tokens de raciocinio interno, quando o modelo os separa (familia Gemini 3).
+     * Entram no total cobrado mas nao aparecem no texto — sem esta coluna, o custo por
+     * questao ficaria subestimado justamente nos modelos que mais raciocinam.
+     */
+    val reasoningTokens: Int = UNAVAILABLE,
+    /** Modelo que de fato respondeu, como a API o identifica. */
+    val modelId: String? = null,
+    val truncated: Boolean = false
+) {
+    /** Soma cobrada pela API: prompt + saida + raciocinio. */
+    val totalTokens: Int
+        get() = listOf(promptTokens, generatedTokens, reasoningTokens)
+            .filter { it >= 0 }.sum()
+
+    companion object {
+        const val UNAVAILABLE = -1
+    }
 }
 
 /**

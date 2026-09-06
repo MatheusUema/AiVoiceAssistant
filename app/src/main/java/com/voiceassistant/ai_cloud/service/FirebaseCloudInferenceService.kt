@@ -1,6 +1,7 @@
 package com.voiceassistant.ai_cloud.service
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import com.google.firebase.Firebase
 import com.google.firebase.FirebaseApp
@@ -63,11 +64,17 @@ class FirebaseCloudInferenceService @Inject constructor(
 
     private var model: GenerativeModel? = null
 
-    override suspend fun generate(prompt: String): String = withContext(Dispatchers.IO) {
+    override suspend fun generate(prompt: String): CloudResult = withContext(Dispatchers.IO) {
         val generativeModel = getOrCreateModel()
+        // elapsedRealtime (CLOCK_BOOTTIME) e nao currentTimeMillis: monotonico E conta
+        // durante a suspensao. Medido no tier servidor, as alternativas falham -- o
+        // monotonico puro para na suspensao e o realtime salta em sincronizacao NTP,
+        // chegando a produzir duracao negativa.
+        val start = SystemClock.elapsedRealtime()
 
         try {
             val response = generativeModel.generateContent(prompt)
+            val latency = SystemClock.elapsedRealtime() - start
 
             val text = response.text
             if (text.isNullOrBlank()) {
@@ -77,7 +84,30 @@ class FirebaseCloudInferenceService @Inject constructor(
                 )
             }
 
-            text
+            // `usageMetadata` e o unico sinal de custo que a API devolve. Era descartado
+            // ate 2026-09-05 -- ver a nota na interface. Sem ele nao ha como estimar o
+            // custo por questao nem comparar o tier cloud com os demais em tokens/s.
+            val uso = response.usageMetadata
+            val finish = response.candidates.firstOrNull()?.finishReason?.toString()
+
+            CloudResult(
+                text = text,
+                latencyMs = latency,
+                promptTokens = uso?.promptTokenCount ?: CloudResult.UNAVAILABLE,
+                generatedTokens = uso?.candidatesTokenCount ?: CloudResult.UNAVAILABLE,
+                reasoningTokens = uso?.thoughtsTokenCount ?: CloudResult.UNAVAILABLE,
+                modelId = config.modelName,
+                // MAX_TOKENS na familia Gemini e o analogo do `stop_type=limit` do
+                // llama.cpp: a resposta mede o teto configurado, nao o modelo.
+                truncated = finish?.contains("MAX_TOKENS", ignoreCase = true) == true
+            ).also {
+                Log.i(
+                    TAG,
+                    "CLOUD ${config.modelName}: ${it.generatedTokens} tokens " +
+                        "(+${it.reasoningTokens} raciocinio), ${it.promptTokens} de prompt, " +
+                        "${latency}ms"
+                )
+            }
         } catch (e: CloudInferenceException) {
             throw e
         } catch (e: IOException) {
