@@ -50,6 +50,64 @@ class EnemDataset @Inject constructor(
     }
 
     /**
+     * Subconjunto **fixo**, lido de `assets/datasets/<nome>.csv` (colunas `id,ano,area`).
+     *
+     * Existe porque [balancedSample] não consegue reproduzir as 389 questões do artigo 1:
+     * ela filtra apenas itens de imagem *sem descrição* (sobram 537) e depois sorteia por
+     * faixa de dificuldade. As 389 são uma lista curada — o subconjunto sem imagem que o
+     * computador coletou e que foi classificado —, e não o resultado de nenhum predicado
+     * que se possa recalcular aqui. Sem esta lista, a coleta no aparelho rodaria outras
+     * questões e a comparação pareada celular × PC não fecharia.
+     *
+     * A **ordem do arquivo é preservada**: é a ordem de referência do artigo 1, e mantê-la
+     * faz o plano ser idêntico entre execuções e entre aparelhos.
+     *
+     * Uma chave que não resolva é **erro fatal**, não item pulado: coletar 380 de 389 em
+     * silêncio produziria uma comparação com denominador errado que ninguém notaria — e
+     * descobrir isso depois de 14 h de aparelho custa a coleta inteira.
+     */
+    fun subset(name: String): List<EnemQuestion> {
+        val keys = loadSubsetKeys(name)
+        check(keys.isNotEmpty()) { "subconjunto '$name' vazio ou ausente em $SUBSET_DIR" }
+
+        val byKey = all().associateBy { Triple(it.id, it.year, it.area) }
+        val missing = keys.filterNot { it in byKey }
+        check(missing.isEmpty()) {
+            "subconjunto '$name': ${missing.size} de ${keys.size} chaves não existem no " +
+                "dataset (primeiras: ${missing.take(3)}) — asset e dataset divergem"
+        }
+
+        Log.i(TAG, "Subconjunto '$name': ${keys.size} questões")
+        return keys.map { byKey.getValue(it) }
+    }
+
+    /** Lê `id,ano,area` do asset, na ordem do arquivo e sem repetir chave. */
+    private fun loadSubsetKeys(name: String): List<Triple<String, Int, String>> = try {
+        context.assets.open("$SUBSET_DIR/$name.csv").bufferedReader(Charsets.UTF_8)
+            .use { reader ->
+                val rows = parseCsv(reader.readText())
+                if (rows.isEmpty()) return emptyList()
+
+                val header = rows.first().withIndex()
+                    .associate { (i, n) -> n.trim().lowercase() to i }
+                val idAt = header["id"] ?: error("asset '$name' sem coluna 'id'")
+                val anoAt = header["ano"] ?: error("asset '$name' sem coluna 'ano'")
+                val areaAt = header["area"] ?: error("asset '$name' sem coluna 'area'")
+
+                rows.drop(1).mapNotNull { row ->
+                    val id = row.getOrNull(idAt)?.trim().orEmpty()
+                    val ano = row.getOrNull(anoAt)?.trim()?.toIntOrNull()
+                    val area = row.getOrNull(areaAt)?.trim().orEmpty()
+                    if (id.isBlank() || ano == null || area.isBlank()) null
+                    else Triple(id, ano, area)
+                }.distinct()
+            }
+    } catch (e: Exception) {
+        Log.e(TAG, "Falha ao ler o subconjunto '$name': ${e.message}", e)
+        throw e
+    }
+
+    /**
      * Divide a lista (já ordenada por dificuldade) em [count] faixas e sorteia uma de
      * cada. Assim a amostra cobre o espectro de dificuldade em vez de se concentrar
      * numa ponta, o que enviesaria a acurácia.
@@ -173,6 +231,9 @@ class EnemDataset @Inject constructor(
     companion object {
         private const val TAG = "EnemDataset"
         const val ASSET_PATH = "datasets/maritaca_enem_irt.csv"
+
+        /** Onde ficam os subconjuntos fixos lidos por [subset]. */
+        const val SUBSET_DIR = "datasets"
 
         /** Seed fixa: a mesma amostra em todos os aparelhos e modelos. */
         const val DEFAULT_SEED = 42L

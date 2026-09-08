@@ -27,6 +27,9 @@ import java.io.File
  *   com.voiceassistant.debug.test/androidx.test.runner.AndroidJUnitRunner
  * ```
  *
+ * Com `-e subset enem_389` a amostragem é substituída pela lista fixa do artigo 1 (as 389
+ * questões sem imagem), que é o que torna a comparação com o computador pareada.
+ *
  * O cenário (offline / LAN / internet) é definido pelo **estado do aparelho** antes de
  * rodar — modo avião, servidor na rede, ou internet. O `routing_log` grava a
  * conectividade observada em cada linha, então o cenário fica registrado no dado e não
@@ -132,6 +135,9 @@ class BenchmarkBatteryTest {
 
         val config = BenchmarkConfig(
             runLabel = args.getString("label") ?: DEFAULT_LABEL,
+            // Subconjunto fixo (asset em `datasets/<nome>.csv`). Com ele, `questionsPerArea`
+            // não é usado: rodam exatamente aquelas questões. Ver `EnemDataset.subset`.
+            subset = args.getString("subset")?.trim()?.takeIf { it.isNotEmpty() },
             questionsPerArea = args.getString("questionsPerArea")?.toIntOrNull() ?: 1,
             repetitions = args.getString("repetitions")?.toIntOrNull() ?: 1,
             blockSize = args.getString("blockSize")?.toIntOrNull() ?: 20,

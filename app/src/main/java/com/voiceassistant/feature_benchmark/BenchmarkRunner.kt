@@ -89,13 +89,25 @@ class BenchmarkRunner @Inject constructor(
     }
 
     private suspend fun runBattery(config: BenchmarkConfig): BenchmarkReport {
-        val questions = dataset.balancedSample(config.questionsPerArea, config.sampleSeed)
+        // Subconjunto fixo tem precedência sobre a amostragem: quando a coleta precisa
+        // casar questão a questão com uma feita fora do aparelho, sortear de novo aqui —
+        // ainda que com a mesma seed — produziria outro conjunto, e a comparação pareada
+        // não fecharia. Ver `EnemDataset.subset`.
+        val questions = config.subset?.takeIf { it.isNotBlank() }
+            ?.let { dataset.subset(it) }
+            ?: dataset.balancedSample(config.questionsPerArea, config.sampleSeed)
         if (questions.isEmpty()) {
             _progress.value = BenchmarkProgress.Failed("Nenhuma questão carregada do dataset")
             return BenchmarkReport(config, emptyList(), emptyList())
         }
 
-        Log.i(TAG, "Bateria iniciada: ${questions.size} questões × k=${config.repetitions}")
+        val origem = config.subset?.takeIf { it.isNotBlank() }
+            ?.let { "subconjunto '$it'" }
+            ?: "amostra balanceada (${config.questionsPerArea}/área, seed ${config.sampleSeed})"
+        Log.i(
+            TAG,
+            "Bateria iniciada: ${questions.size} questões × k=${config.repetitions} — $origem"
+        )
 
         // Warm-up descartado: a primeira inferência paga alocação de buffers e caches
         // frios, e entraria na média como se fosse custo normal.
@@ -395,8 +407,17 @@ data class BenchmarkConfig(
     /** Identifica esta execução no `routing_log` (vira `sessionId`). */
     val runLabel: String,
 
-    /** Questões por área (4 áreas). 20 → 80 questões. */
+    /** Questões por área (4 áreas). 20 → 80 questões. Ignorado quando [subset] vem. */
     val questionsPerArea: Int = 20,
+
+    /**
+     * Nome do subconjunto fixo em `assets/datasets/<nome>.csv`, sem a extensão.
+     *
+     * Quando preenchido, substitui a amostragem: roda exatamente aquelas questões, na
+     * ordem do arquivo. É o que permite casar a coleta do aparelho com uma feita no
+     * computador — `enem_389` é a lista do artigo 1 (LC 112, CH 117, CN 77, MT 83).
+     */
+    val subset: String? = null,
 
     /** k: repetições de cada questão. Mediana e dispersão saem daqui. */
     val repetitions: Int = 3,
