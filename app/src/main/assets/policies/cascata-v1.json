@@ -99,5 +99,5 @@
  "dataset_hash": "4cc091b710a2ee51",
  "treino_n": 309,
  "split": "split-309-80.json",
- "observacao": "AUC in-sample serve só de sanidade; o desempenho honesto da Fase 1 é out-of-fold (roteador 0,665; cascata 0,704)."
+ "observacao": "AUC in-sample serve só de sanidade; o desempenho honesto da Fase 1 é out-of-fold: roteador 0,688 [0,677; 0,699] e cascata 0,735 [0,731; 0,742], ambos da LogisticRegression deste asset. Corrigido em 2026-10-03: constavam 0,665/0,704, que são das variantes em árvore (gradient boosting e árvore rasa), não desta."
 }
