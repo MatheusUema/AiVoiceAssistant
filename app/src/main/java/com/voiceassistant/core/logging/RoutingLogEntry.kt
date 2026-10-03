@@ -135,10 +135,44 @@ data class RoutingLogEntry(
     val answerMethod: String? = null,
 
     /** 1 = acertou, 0 = errou, -1 = ainda não classificada. */
-    val isCorrect: Int = UNAVAILABLE_INT
+    val isCorrect: Int = UNAVAILABLE_INT,
+
+    // ── Política de roteamento (Bloco A, metade b) ────────────────────────────
+
+    /**
+     * Qual política decidiu esta linha (`LEARNED`, `CASCADE`, ...). Null nas coletas
+     * anteriores à instrumentação — e é assim que a análise as distingue.
+     */
+    val policyName: String? = null,
+
+    /** Score do roteador aprendido, pré-inferência. -1 quando não houve. */
+    val preScore: Float = UNAVAILABLE_FLOAT,
+
+    /** Score da cascata recalibrada, pós-inferência. -1 quando não houve. */
+    val cascadeScore: Float = UNAVAILABLE_FLOAT,
+
+    /**
+     * True se escalou por decisão de POLÍTICA. Distingue do fallback por FALHA, que
+     * também produz uma linha de nuvem — sem esta coluna os dois seriam indistinguíveis
+     * e a fração escalada sairia inflada pelos erros.
+     */
+    val escalated: Boolean = false,
+
+    /**
+     * Custo da própria decisão de roteamento, em ms.
+     *
+     * É o número que a análise offline não pode produzir: só rodando no aparelho se
+     * descobre se o pré-filtro se paga. Um roteador que gasta 200 ms para evitar 30 s de
+     * nuvem é bom negócio; um que gasta 2 s não é.
+     */
+    val policyDecisionMs: Long = UNAVAILABLE_LONG,
+
+    /** Latência do tier para onde escalou, quando escalou. -1 quando não escalou. */
+    val escalationLatencyMs: Long = UNAVAILABLE_LONG
 ) {
     companion object {
         const val UNAVAILABLE_INT: Int = -1
+        const val UNAVAILABLE_FLOAT: Float = -1f
         const val UNAVAILABLE_LONG: Long = -1L
         const val UNAVAILABLE_DOUBLE: Double = -1.0
     }

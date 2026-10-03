@@ -4,6 +4,7 @@ import android.os.SystemClock
 import android.util.Log
 import com.voiceassistant.BuildConfig
 import com.voiceassistant.ai_server.model.ServerConfig
+import com.voiceassistant.feature_tutor.policy.TokenDistribution
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -212,6 +213,34 @@ open class ServerInferenceService @Inject constructor(
 
         if (tokenConfidences.isEmpty()) return CONFIDENCE_UNAVAILABLE
         return tokenConfidences.average().toFloat()
+    }
+
+    /**
+     * Converte `completion_probabilities` para o formato neutro que a **cascata** consome.
+     *
+     * O dado já chegava (`n_probs=5` no [com.voiceassistant.ai_server.model.ServerConfig]),
+     * mas [calculateConfidence] o colapsava numa média e descartava o resto — jogando fora
+     * 14 das 15 estatísticas de distribuição que a Fase 1 mostrou baterem a confiança crua.
+     * Aqui nada de novo é pedido ao servidor: só se para de deitar fora o que ele manda.
+     *
+     * As probabilidades saem **sem renormalizar**; quem renormaliza sobre o top-k é o
+     * [com.voiceassistant.feature_tutor.policy.LogprobFeatureExtractor], num lugar só para
+     * os dois tiers.
+     */
+    internal fun toTokenDistributions(probs: List<TokenProb>?): List<TokenDistribution> {
+        if (probs.isNullOrEmpty()) return emptyList()
+        return probs.map { tp ->
+            // Os dois schemas do llama-server: o novo traz `top_logprobs` (log natural),
+            // o antigo `probs` com a probabilidade já linear.
+            val top = tp.topLogprobs?.mapNotNull { c -> c.logprob?.let { exp(it.toDouble()) } }
+                ?: tp.probs?.mapNotNull { it.prob?.toDouble() }
+                ?: emptyList()
+            TokenDistribution(
+                token = tp.token ?: tp.content,
+                prob = chosenTokenProb(tp)?.toDouble(),
+                topProbs = top
+            )
+        }
     }
 
     /** Probabilidade [0,1] do token escolhido nesta posição, ou null se indisponível. */

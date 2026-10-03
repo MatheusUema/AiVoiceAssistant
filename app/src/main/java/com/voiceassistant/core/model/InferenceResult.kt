@@ -19,7 +19,23 @@ data class InferenceResult(
      * não instrumenta — o campo é opcional de propósito, para que adicionar telemetria
      * não obrigue nenhum tier a mudar.
      */
-    val telemetry: InferenceTelemetry? = null
+    val telemetry: InferenceTelemetry? = null,
+
+    /**
+     * Como esta resposta deve ser **apresentada** — direto, com ressalva, ou mediada ao
+     * professor. O eixo vertical da elasticidade; ver [ResponseMode].
+     *
+     * Null quando não há com que decidir: a requisição não pediu
+     * ([InferenceRequest.deriveResponseMode]), a resposta não veio do tier local (os
+     * demais não expõem a distribuição de logprobs da qual o score sai), os assets de
+     * política não estão no build, ou o score saiu indisponível. **Null não é um modo** —
+     * a interface simplesmente não mostra bandeira, que é o comportamento anterior.
+     *
+     * Note que isto é independente de [confidence]: a confiança crua continua aqui para o
+     * log, e **não** é o que decide a faixa. Ver o KDoc de
+     * [com.voiceassistant.feature_tutor.policy.ResponseModeResolver] para o porquê.
+     */
+    val responseMode: ResponseMode? = null
 ) {
     companion object {
         /** Sentinela: confiança não disponível para esta origem. */

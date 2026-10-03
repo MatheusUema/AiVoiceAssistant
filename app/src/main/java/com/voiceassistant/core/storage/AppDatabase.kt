@@ -25,6 +25,12 @@ import com.voiceassistant.core.model.ChatMessage
  *     e como foi extraída) — o outro eixo da fronteira de Pareto.
  * v5: tabela `block_energy` — a energia por bloco era calculada e só ia para o logcat,
  *     e três blocos da coleta do Device 1 se perderam na rotação do buffer.
+ * v6: colunas da política na `routing_log` (`policyName`, `preScore`, `cascadeScore`,
+ *     `escalated`, `policyDecisionMs`, `escalationLatencyMs`) — sem elas a linha registra
+ *     QUE rota foi tomada, mas não POR QUE.
+ * v7: `responseMode` na `chat_messages` — o eixo vertical da elasticidade (Bloco D
+ *     parte 1). A tela lê a conversa do Room, então sem a coluna a bandeira de ressalva
+ *     desapareceria ao recarregar a sessão.
  */
 @Database(
     entities = [
@@ -34,7 +40,7 @@ import com.voiceassistant.core.model.ChatMessage
         DeviceProfileEntry::class,
         BlockEnergyEntry::class
     ],
-    version = 5,
+    version = 7,
     exportSchema = true   // permite versionamento das migrações em /schemas
 )
 @TypeConverters(Converters::class)

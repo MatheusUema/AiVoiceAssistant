@@ -49,6 +49,20 @@ data class InferenceRequest(
     val questionArea: String? = null,
 
     /**
+     * Alternativas da questão, quando ela é de múltipla escolha.
+     *
+     * O **roteador aprendido** precisa delas: quatro das suas dezoito features descrevem
+     * as alternativas (comprimento médio, desvio, fração de numéricas). Extraí-las de
+     * volta do prompt montado por regex seria frágil — os enunciados têm parênteses e
+     * quebras de linha —, então viajam ao lado dele.
+     *
+     * Vazia no chat, onde não há alternativas: as features saem 0 e o modelo pontua com o
+     * que tem. Isso é uma diferença real entre a bateria e o uso, e entra como ressalva na
+     * análise em vez de ser dissimulada.
+     */
+    val alternatives: List<String> = emptyList(),
+
+    /**
      * Gabarito (A–E) da questão, quando ela tem um. Null fora do modo teste.
      *
      * É só um rótulo carregado junto: o roteador não decide nada com ele, apenas o
@@ -56,7 +70,23 @@ data class InferenceRequest(
      * resposta com gabarito depois exigiria reidentificar a questão pelo texto — que é
      * frágil e se perde quando a amostra muda.
      */
-    val expectedAnswer: String? = null
+    val expectedAnswer: String? = null,
+
+    /**
+     * Pede que o roteador derive o [ResponseMode] desta resposta — o eixo vertical da
+     * elasticidade, que a interface do Bloco D parte 1 exibe.
+     *
+     * **Default false, e isso é deliberado.** Quem liga é o caminho de **chat**; a bateria
+     * de medição não liga, e por isso não paga a aritmética extra nem muda uma linha do
+     * `routing_log`. O eixo experimental do Bloco A (qual `RoutingPolicy` decide o
+     * roteamento) fica intacto: derivar o modo pedagógico **não** é rotear, é descrever a
+     * resposta que já saiu.
+     *
+     * Um flag explícito, e não a reutilização de [rawPrompt] ou de [blockId] como
+     * sinalizador de "é a bateria": aqueles dois significam outra coisa, e sobrecarregá-los
+     * esconderia esta decisão atrás de um efeito colateral.
+     */
+    val deriveResponseMode: Boolean = false
 )
 
 enum class PromptComplexity {

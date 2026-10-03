@@ -16,6 +16,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -39,6 +41,24 @@ namespace {
 constexpr int   kDefaultBatch     = 256;
 constexpr int   kContextHeadroom  = 8;
 constexpr float kUnavailable      = -1.0f;
+
+/**
+ * Quantos candidatos por posição são retidos — o mesmo `n_probs=5` que o
+ * `ServerConfig` pede ao `llama-server`. Os dois tiers têm que entregar a MESMA forma,
+ * senão a entropia e a margem da cascata saem de distribuições diferentes.
+ */
+constexpr int   kTopProbs = 5;
+
+/**
+ * Doubles por token em `llama_session::token_samples`:
+ * {prob_do_escolhido, top1..top5} — probabilidades reais do softmax, não renormalizadas.
+ *
+ * A renormalização sobre o top-k acontece no extrator Kotlin, num lugar só, para os dois
+ * tiers. Espelhado em `TokenProbSample.STRIDE` (LlamaModels.kt): acrescentar um campo
+ * aqui e esquecer lá desloca todos os tokens seguintes, e o vetor de features sai
+ * numérico e errado, sem exceção nem log.
+ */
+constexpr int   kTokenSampleStride = 1 + kTopProbs;
 
 std::mutex  g_err_mutex;
 std::string g_last_error;
@@ -108,6 +128,43 @@ struct llama_session {
      */
     double  sum_token_prob   = 0.0;
     int32_t n_token_prob     = 0;
+
+    /**
+     * Amostra POR TOKEN, para a cascata: [kTokenSampleStride] doubles por posição, na
+     * ordem {prob_do_escolhido, top1..top5} — probabilidades reais do softmax.
+     *
+     * Por que reter, se a confiança média já existe: a cascata recalibrada da Fase 1 usa
+     * 15 estatísticas da distribuição (mínimo, p10, p25, desvio, entropia, margem, média
+     * dos últimos 10...). A média sozinha é UMA delas — e justamente a que a Fase 1
+     * mostrou ser a mais fraca. Guardar só a média joga fora o sinal antes do uso.
+     *
+     * Por que os top-k CRUS e não a entropia já calculada: o Python calcula entropia e
+     * margem sobre o top-k RENORMALIZADO, que é o que o `llama-server` entrega com
+     * `n_probs=5`. Uma entropia sobre o vocabulário inteiro seria outro número — teto
+     * ln(150000) ≈ 11,9 contra ln(5) ≈ 1,61. Emitindo os mesmos top-k que o servidor, os
+     * dois tiers passam pelo mesmo extrator e a renormalização mora num lugar só.
+     *
+     * O custo de CALCULAR é ~zero: `accumulate_token_prob` já varre o vocabulário duas
+     * vezes para normalizar o softmax, e os k maiores saem da mesma varredura. O custo é
+     * de MEMÓRIA: 6 doubles × ~1000 tokens ≈ 48 KB, ao lado de um modelo de 1,1 GB.
+     *
+     * Limpo no início de cada `generate`, como os demais contadores: uma leitura após uma
+     * geração cancelada deve devolver o que ELA produziu, não o que sobrou da anterior.
+     */
+    std::vector<double> token_samples;
+
+    /**
+     * Texto de cada posição registrada em [token_samples], no MESMO índice.
+     *
+     * Existe por uma feature só, `conf_letra_b1` da cascata: ela procura o token cuja
+     * string, depois de removida a pontuação, é a letra da alternativa. Sem as strings, o
+     * tier local cai no fallback (mediana) enquanto o tier servidor usa o valor real — e
+     * as duas metades do estudo passariam a medir features diferentes.
+     *
+     * O texto NÃO custa nada a mais: `common_token_to_piece` já é chamado no laço para
+     * montar a resposta. O custo é a cópia da string.
+     */
+    std::vector<std::string> token_pieces;
 
     /**
      * Texto do canal de raciocínio da última geração, separado da resposta.
@@ -456,20 +513,40 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeCountTokens(JNIEnv * env, jobjec
  * É desprezível ao lado do forward de 1,5 bilhão de parâmetros que produziu esses
  * logits — medido no Device 1, abaixo do ruído entre execuções.
  */
-void accumulate_token_prob(llama_session * s, llama_token tok) {
+bool accumulate_token_prob(llama_session * s, llama_token tok) {
     const float * logits = llama_get_logits_ith(s->ctx, -1);
     if (logits == nullptr) {
-        return;
+        return false;
     }
     const llama_vocab * vocab   = llama_model_get_vocab(s->model);
     const int           n_vocab = llama_vocab_n_tokens(vocab);
     if (tok < 0 || tok >= n_vocab) {
-        return;
+        return false;
     }
 
+    // Os `kTopProbs` maiores logits saem da MESMA varredura que já era necessária para o
+    // máximo. Guardar os logits crus (e não entropia/margem já calculadas) é deliberado:
+    //
+    // A cascata da Fase 1 calcula entropia e margem sobre o TOP-K RENORMALIZADO
+    // (`pv = exp(top_logprobs); pv /= pv.sum()`), porque é isso que o `llama-server`
+    // entrega com `n_probs=5`. Uma entropia sobre o vocabulário INTEIRO seria outro
+    // número — teto ln(150000) ≈ 11,9 contra ln(5) ≈ 1,61 — e alimentaria o modelo com
+    // uma feature de outra distribuição. Emitindo os mesmos top-k que o servidor emite,
+    // os dois tiers passam pelo MESMO extrator e a renormalização acontece num lugar só.
     float max_logit = logits[0];
-    for (int i = 1; i < n_vocab; i++) {
-        if (logits[i] > max_logit) { max_logit = logits[i]; }
+    float top[kTopProbs];
+    for (int k = 0; k < kTopProbs; k++) {
+        top[k] = -std::numeric_limits<float>::infinity();
+    }
+    for (int i = 0; i < n_vocab; i++) {
+        const float l = logits[i];
+        if (l > max_logit) { max_logit = l; }
+        // Inserção nos k maiores. k é 5, então isto é mais barato que qualquer estrutura.
+        if (l > top[kTopProbs - 1]) {
+            int k = kTopProbs - 1;
+            while (k > 0 && top[k - 1] < l) { top[k] = top[k - 1]; k--; }
+            top[k] = l;
+        }
     }
 
     double sum_exp = 0.0;
@@ -477,12 +554,24 @@ void accumulate_token_prob(llama_session * s, llama_token tok) {
         sum_exp += std::exp(static_cast<double>(logits[i] - max_logit));
     }
     if (sum_exp <= 0.0) {
-        return;
+        return false;
     }
 
     const double prob = std::exp(static_cast<double>(logits[tok] - max_logit)) / sum_exp;
     s->sum_token_prob += prob;
     s->n_token_prob++;
+
+    // Ordem espelhada em `TokenProbSample.fromFlat` (LlamaModels.kt): a probabilidade do
+    // escolhido, depois as `kTopProbs` maiores em ordem decrescente. Os dois lados citam
+    // `kTokenSampleStride` em vez de repetirem o número solto.
+    s->token_samples.push_back(prob);
+    for (int k = 0; k < kTopProbs; k++) {
+        s->token_samples.push_back(
+                std::isfinite(top[k])
+                        ? std::exp(static_cast<double>(top[k] - max_logit)) / sum_exp
+                        : 0.0);
+    }
+    return true;
 }
 
 /**
@@ -509,6 +598,11 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeGenerate(
     s->n_prompt_tokens = s->n_gen_tokens = s->n_reasoning_tokens = 0;
     s->sum_token_prob = 0.0;
     s->n_token_prob = 0;
+    // Zerado junto com os demais: sem isto, uma leitura depois de uma geração cancelada
+    // devolveria as amostras da geração ANTERIOR concatenadas — features de cascata
+    // calculadas sobre a resposta errada, sem sintoma visível.
+    s->token_samples.clear();
+    s->token_pieces.clear();
     s->last_reasoning.clear();
     s->was_cancelled = false;
     s->cancel_requested.store(false, std::memory_order_relaxed);
@@ -607,7 +701,15 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeGenerate(
         // artigo 1 — média de exp(logprob) sobre as posições geradas. Precisa ser a
         // mesma conta nos dois tiers, senão comparar confiança local × servidor mede a
         // diferença entre as fórmulas em vez da diferença entre os modelos.
-        accumulate_token_prob(s, tok);
+        // A string entra no MESMO passo da amostra numérica, e só quando ela entra.
+        // O alinhamento por índice é o contrato de `conf_letra_b1`, e ele é frágil de
+        // duas formas que se somam: `accumulate_token_prob` desiste em alguns casos
+        // (logits nulos, token fora do vocabulário), e o laço faz `break` no EOG ANTES
+        // de `common_token_to_piece` — então empilhar lá embaixo perderia a última
+        // posição e deslocaria tudo em uma casa.
+        if (accumulate_token_prob(s, tok)) {
+            s->token_pieces.push_back(common_token_to_piece(s->ctx, tok));
+        }
 
         common_sampler_accept(sampler, tok, true);
 
@@ -756,6 +858,81 @@ Java_com_voiceassistant_llama_LlamaBridge_nativeLastStats(JNIEnv * env, jobject 
                 : kUnavailable;
     }
     env->SetDoubleArrayRegion(result, 0, kStatsLen, values);
+    return result;
+}
+
+/**
+ * Amostras POR TOKEN da última geração, achatadas em grupos de
+ * [kTokenSampleStride]: {prob_do_escolhido, entropia, top1, top2}.
+ *
+ * É a entrada da cascata recalibrada — as 15 estatísticas de distribuição que a Fase 1
+ * mostrou baterem a confiança crua. Fica FORA do `nativeLastStats` de propósito: aquele
+ * array tem tamanho fixo e é lido por índice; este é variável (4 × tokens gerados) e
+ * cresce com a resposta.
+ *
+ * Devolve array vazio, e não null, quando não houve amostra: null obrigaria todo chamador
+ * a distinguir "sem dados" de "erro de JNI", e aqui os dois casos têm o mesmo tratamento
+ * (não há cascata a calcular).
+ */
+JNIEXPORT jdoubleArray JNICALL
+Java_com_voiceassistant_llama_LlamaBridge_nativeLastTokenProbs(
+        JNIEnv * env, jobject /*thiz*/, jlong handle) {
+    auto * s = as_session(handle);
+    const jsize n = (s == nullptr)
+            ? 0
+            : static_cast<jsize>(s->token_samples.size());
+
+    jdoubleArray result = env->NewDoubleArray(n);
+    if (result == nullptr) {
+        return nullptr;
+    }
+    if (n > 0) {
+        env->SetDoubleArrayRegion(result, 0, n, s->token_samples.data());
+    }
+    return result;
+}
+
+/**
+ * Texto de cada posição de `nativeLastTokenProbs`, no MESMO índice.
+ *
+ * Serve a uma feature só da cascata, `conf_letra_b1`: a probabilidade do token que
+ * corresponde à alternativa escolhida. Sem isto, o tier local cairia no fallback (a
+ * mediana) enquanto o tier servidor usa o valor real, e as duas metades do estudo
+ * mediriam features diferentes com o mesmo nome.
+ *
+ * As strings vêm de `common_token_to_piece`, que o laço de geração já chamava para montar
+ * a resposta — o texto não é recomputado, só retido.
+ */
+JNIEXPORT jobjectArray JNICALL
+Java_com_voiceassistant_llama_LlamaBridge_nativeLastTokenStrings(
+        JNIEnv * env, jobject /*thiz*/, jlong handle) {
+    auto * s = as_session(handle);
+    const jsize n = (s == nullptr) ? 0 : static_cast<jsize>(s->token_pieces.size());
+
+    jclass string_class = env->FindClass("java/lang/String");
+    if (string_class == nullptr) {
+        return nullptr;
+    }
+    jobjectArray result = env->NewObjectArray(n, string_class, nullptr);
+    if (result == nullptr) {
+        return nullptr;
+    }
+    for (jsize i = 0; i < n; i++) {
+        // NewStringUTF espera UTF-8 modificado e VÁLIDO. Um token pode cortar um
+        // caractere multibyte ao meio (o llama.cpp emite pedaços, não caracteres), e uma
+        // sequência inválida aqui aborta a VM. `trim_to_valid_utf8` é a mesma função que
+        // já protege o texto da resposta.
+        const std::string limpo = trim_to_valid_utf8(s->token_pieces[i]);
+        jstring js = env->NewStringUTF(limpo.c_str());
+        if (js == nullptr) {
+            return nullptr;
+        }
+        env->SetObjectArrayElement(result, i, js);
+        // Sem isto, uma resposta de mil tokens estoura a tabela de referências locais
+        // (o limite padrão da JNI é 512) e a VM aborta com "local reference table
+        // overflow" — só em respostas longas, que é o caso normal na coleta.
+        env->DeleteLocalRef(js);
+    }
     return result;
 }
 
