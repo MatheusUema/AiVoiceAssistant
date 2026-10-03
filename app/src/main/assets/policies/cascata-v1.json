@@ -1,0 +1,103 @@
+{
+ "nome": "cascata",
+ "versao": "v1",
+ "alvo": "acerto de sistema do qwen2.5-1.5b (1=acerto; erro/SR/truncada=0)",
+ "features": [
+  "media",
+  "mediana",
+  "minimo",
+  "desvio",
+  "p10",
+  "p25",
+  "frac_baixa",
+  "frac_muito_baixa",
+  "n_tokens",
+  "media_ultimos10",
+  "media_primeiros10",
+  "entropia_media",
+  "entropia_max",
+  "margem_media",
+  "margem_min",
+  "conf_letra_b1",
+  "tem_letra"
+ ],
+ "scaler": {
+  "mean": [
+   0.7994267344570251,
+   0.94204761363302,
+   0.10399486744165488,
+   0.2585279310337138,
+   0.3750625971633946,
+   0.6326097219398603,
+   0.1899450854025166,
+   0.031242072180875245,
+   284.2880258899676,
+   0.8487386998678922,
+   0.869903979158125,
+   0.4424872806933303,
+   1.577930550961182,
+   0.7450525130995387,
+   0.006243998134353864,
+   0.8049895958463729,
+   1.0
+  ],
+  "scale": [
+   0.061810724331715465,
+   0.07101099586264392,
+   0.03878652620391261,
+   0.03754147356745384,
+   0.12194957062689021,
+   0.15276885099401524,
+   0.07559406523414357,
+   0.021852050889660142,
+   146.49587031187255,
+   0.10553237944975317,
+   0.04711356186268345,
+   0.12125586567230395,
+   0.025386089576121252,
+   0.0701428843583877,
+   0.00884601287580589,
+   0.19792182284823318,
+   1.0
+  ]
+ },
+ "modelo": {
+  "tipo": "LogisticRegression",
+  "C": 1.0,
+  "coef": [
+   0.7121494232605778,
+   -0.2497916521297754,
+   0.4230767670468975,
+   0.5198406208962116,
+   -0.3293536267782293,
+   -0.634300986413408,
+   -0.47339406993814215,
+   0.13208113626638443,
+   0.1075404542924424,
+   -0.04857235115349321,
+   0.802599531024481,
+   -0.6535365403134844,
+   0.10921632876616996,
+   -0.3428162233404517,
+   0.03640270283961738,
+   0.09298482418190171,
+   0.0
+  ],
+  "intercept": 0.3618721230293088
+ },
+ "uso": "score = sigmoid(intercept + sum_i coef_i * (x_i - mean_i) / scale_i). score alto = maior probabilidade de o modelo local ACERTAR. Para rotear, escale as questoes de MENOR score.",
+ "limiar": {
+  "referencia_mediana_treino": 0.6340934050743208,
+  "esquema": "por orçamento: para escalar uma fração f das questões, use o quantil f da distribuição de scores como corte (escala quem fica ABAIXO). Os quantis de treino abaixo são o ponto de partida; o app pode recalibrar com sua própria distribuição.",
+  "quantis_treino": {
+   "0.1": 0.2851805736931631,
+   "0.25": 0.4361378857840839,
+   "0.5": 0.6340934050743208,
+   "0.75": 0.7388994589698668
+  }
+ },
+ "dataset_hash": "4cc091b710a2ee51",
+ "treino_n": 309,
+ "split": "split-309-80.json",
+ "observacao": "AUC in-sample serve só de sanidade; o desempenho honesto da Fase 1 é out-of-fold (roteador 0,665; cascata 0,704)."
+}

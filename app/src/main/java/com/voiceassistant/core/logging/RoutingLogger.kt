@@ -50,7 +50,14 @@ class RoutingLogger @Inject constructor(
         expectedAnswer: String? = null,
         predictedAnswer: String? = null,
         answerMethod: String? = null,
-        isCorrect: Int = RoutingLogEntry.UNAVAILABLE_INT
+        isCorrect: Int = RoutingLogEntry.UNAVAILABLE_INT,
+        // Política de roteamento (Bloco A). Defaults preservam as chamadas existentes.
+        policyName: String? = null,
+        preScore: Float = RoutingLogEntry.UNAVAILABLE_FLOAT,
+        cascadeScore: Float = RoutingLogEntry.UNAVAILABLE_FLOAT,
+        escalated: Boolean = false,
+        policyDecisionMs: Long = RoutingLogEntry.UNAVAILABLE_LONG,
+        escalationLatencyMs: Long = RoutingLogEntry.UNAVAILABLE_LONG
     ) {
         dao.insert(
             RoutingLogEntry(
@@ -89,7 +96,13 @@ class RoutingLogger @Inject constructor(
                 expectedAnswer = expectedAnswer,
                 predictedAnswer = predictedAnswer,
                 answerMethod = answerMethod,
-                isCorrect = isCorrect
+                isCorrect = isCorrect,
+                policyName = policyName,
+                preScore = preScore,
+                cascadeScore = cascadeScore,
+                escalated = escalated,
+                policyDecisionMs = policyDecisionMs,
+                escalationLatencyMs = escalationLatencyMs
             )
         )
     }
@@ -156,6 +169,12 @@ class RoutingLogger @Inject constructor(
                 append(csv(e.predictedAnswer.orEmpty())).append(',')
                 append(csv(e.answerMethod.orEmpty())).append(',')
                 append(e.isCorrect).append(',')
+                append(csv(e.policyName.orEmpty())).append(',')
+                append(e.preScore).append(',')
+                append(e.cascadeScore).append(',')
+                append(if (e.escalated) 1 else 0).append(',')
+                append(e.policyDecisionMs).append(',')
+                append(e.escalationLatencyMs).append(',')
                 append(csv(e.responseText))
             }
         }
@@ -312,7 +331,12 @@ class RoutingLogger @Inject constructor(
                 "generated_tokens,reasoning_tokens,ttft_ms,ingestion_ms,generation_ms," +
                 "tokens_per_sec,peak_ram_mb,threads,backends,stop_reason,truncated," +
                 "block_id,run_index,question_id,question_year,question_area,expected_answer," +
-                "predicted_answer,answer_method,is_correct,response"
+                "predicted_answer,answer_method,is_correct," +
+                // Política (Bloco A). Vêm ANTES de `response` porque ela é a última coluna
+                // por ser a única multilinha — colocá-las depois quebraria a leitura de
+                // qualquer parser que conte campos a partir do fim.
+                "policy_name,pre_score,cascade_score,escalated,policy_decision_ms," +
+                "escalation_latency_ms,response"
 
         /** `manual_answer` sai vazia de propósito: é a coluna que a pessoa preenche. */
         private const val ANSWERS_HEADER =

@@ -3,6 +3,7 @@ package com.voiceassistant.feature_tutor.policy
 import android.app.Application
 import com.voiceassistant.ai_cloud.model.CloudModelConfig
 import com.voiceassistant.ai_cloud.service.CloudInferenceService
+import com.voiceassistant.ai_cloud.service.CloudResult
 import com.voiceassistant.ai_local.manager.DeviceCapabilityChecker
 import com.voiceassistant.ai_local.manager.LocalModelManager
 import com.voiceassistant.ai_local.model.LocalModelConfig
@@ -735,7 +736,11 @@ class RoutingLoggerCsvTest {
                 "generated_tokens,reasoning_tokens,ttft_ms,ingestion_ms,generation_ms," +
                 "tokens_per_sec,peak_ram_mb,threads,backends,stop_reason,truncated," +
                 "block_id,run_index,question_id,question_year,question_area,expected_answer," +
-                "predicted_answer,answer_method,is_correct,response",
+                "predicted_answer,answer_method,is_correct," +
+                // Colunas da política (Bloco A). Ficam ANTES de `response` porque ela é a
+                // única multilinha e tem que continuar sendo a última.
+                "policy_name,pre_score,cascade_score,escalated,policy_decision_ms," +
+                "escalation_latency_ms,response",
             lines.first()
         )
         assertEquals(2, lines.size)
@@ -787,14 +792,22 @@ private class FakeLocalInferenceService : LocalInferenceService {
     override fun unloadModel() {}
 }
 
+/**
+ * O `generate` devolve [CloudResult], e não `String`, desde que o tier cloud passou a
+ * trafegar o `usageMetadata` (sem ele toda linha de nuvem saía com tokens em -1). Este
+ * fake ficou para trás na mudança e **o source set de testes unitários parou de
+ * compilar** — o que passou despercebido porque a coleta do estudo roda por `androidTest`,
+ * que compila separado. Mantido `generateResult: String` para não mexer nos casos que já
+ * existem; o embrulho em [CloudResult] acontece aqui.
+ */
 private class FakeCloudInferenceService : CloudInferenceService {
     var generateResult: String = "resposta cloud"
     var shouldFail: Boolean = false
     var available: Boolean = true
     override val isAvailable: Boolean get() = available
-    override suspend fun generate(prompt: String): String {
+    override suspend fun generate(prompt: String): CloudResult {
         if (shouldFail) throw Exception("Falha cloud simulada")
-        return generateResult
+        return CloudResult(text = generateResult, latencyMs = 0L)
     }
 }
 

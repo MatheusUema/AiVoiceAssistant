@@ -177,7 +177,17 @@ class LlamaEngine(
             LlamaGeneration(
                 text = text,
                 stats = LlamaStats.fromArray(LlamaBridge.nativeLastStats(current)),
-                reasoning = LlamaBridge.nativeLastReasoning(current)
+                reasoning = LlamaBridge.nativeLastReasoning(current),
+                // `runCatching`: uma libllama_bridge.so antiga não exporta este símbolo e
+                // o `UnsatisfiedLinkError` derrubaria a geração INTEIRA — trocando uma
+                // resposta boa por nenhuma, para perder um sinal opcional. Sem cascata é
+                // um modo degradado aceitável; sem resposta não é.
+                tokenProbs = runCatching {
+                    TokenProbSample.fromFlat(
+                        LlamaBridge.nativeLastTokenProbs(current),
+                        LlamaBridge.nativeLastTokenStrings(current)
+                    )
+                }.getOrDefault(emptyList())
             )
         }
 

@@ -57,6 +57,22 @@ internal object LlamaBridge {
     external fun nativeLastStats(handle: Long): DoubleArray?
     external fun nativeLastReasoning(handle: Long): String
 
+    /**
+     * Amostras por token da última geração, achatadas em grupos de
+     * [TokenProbSample.STRIDE]: {prob_do_escolhido, top1..top5}.
+     *
+     * Separado do [nativeLastStats] porque o tamanho é variável ([TokenProbSample.STRIDE]
+     * × tokens gerados), enquanto aquele é um array fixo lido por índice. Vazio quando não
+     * houve amostra.
+     */
+    external fun nativeLastTokenProbs(handle: Long): DoubleArray?
+
+    /**
+     * Texto de cada posição de [nativeLastTokenProbs], no mesmo índice. Necessário para
+     * a feature `conf_letra_b1` da cascata, que casa o token pela string.
+     */
+    external fun nativeLastTokenStrings(handle: Long): Array<String>?
+
     /** Sinaliza cancelamento; seguro chamar de outra thread durante a geração. */
     external fun nativeRequestCancel(handle: Long)
 }

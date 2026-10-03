@@ -112,13 +112,21 @@ class MigrationTest {
     fun migra3Para4PreservandoAsMetricasDeHardware() {
         helper.createDatabase(TEST_DB, 3).apply {
             execSQL(
+                // TODAS as colunas NOT NULL sem default da v3 precisam de valor: o
+                // SQLite recusa o INSERT, e o teste morria em `SQLiteConstraintException`
+                // antes de exercitar a migração. Estava assim desde que a v3 ganhou as
+                // colunas de hardware — passou despercebido porque o `androidTest` compila
+                // e roda separado do `test`, e esta suíte não era executada.
                 "INSERT INTO routing_log (timestamp, sessionId, questionText, " +
                     "complexityPreFilter, routeDecision, confidenceScore, confidenceMethod, " +
                     "finalTier, pedagogicalMode, latencyMs, modelId, connectivity, " +
-                    "deviceId, promptTokens, ttftMs, peakProcessRamMb, threads, truncated) " +
+                    "deviceId, promptTokens, generatedTokens, reasoningTokens, ttftMs, " +
+                    "ingestionMs, generationMs, tokensPerSec, peakProcessRamMb, threads, " +
+                    "truncated) " +
                     "VALUES (1700000000000, 'dev1-gemma4-energia3', 'questão', 'SIMPLE', " +
                     "'LOCAL', -1.0, 'none', 'LOCAL', 'EXPLAIN', 21222, 'gemma-4-e2b', " +
-                    "'offline', 'dev1', 395, 20543.9, 4190, 4, 1)"
+                    "'offline', 'dev1', 395, 161, 158, 20543.9, -1.0, -1.0, -1.0, " +
+                    "4190, 4, 1)"
             )
             close()
         }
@@ -144,6 +152,65 @@ class MigrationTest {
                 assertTrue("predictedAnswer deveria ser nulo", c.isNull(2))
                 assertEquals("", c.getString(3))
             }
+    }
+
+    /**
+     * v5→v6: as colunas da POLÍTICA de roteamento (Bloco A, metade b).
+     *
+     * A `routing_log` desta versão guarda as coletas das 389 nos quatro aparelhos — dias
+     * de aparelho que não se refazem. Recriar a tabela as apagaria, então a migração é por
+     * ALTER TABLE, e este teste existe para que uma regressão nisso falhe aqui e não em
+     * campo, depois de a coleta já ter sumido.
+     */
+    @Test
+    fun migra5Para6PreservandoAsColetasDasPoliticas() {
+        helper.createDatabase(TEST_DB, 5).apply {
+            execSQL(
+                "INSERT INTO routing_log (timestamp, sessionId, questionText, " +
+                    "complexityPreFilter, routeDecision, confidenceScore, confidenceMethod, " +
+                    "finalTier, pedagogicalMode, latencyMs, modelId, connectivity, " +
+                    "deviceId, promptTokens, generatedTokens, reasoningTokens, ttftMs, " +
+                    "ingestionMs, generationMs, tokensPerSec, peakProcessRamMb, threads, " +
+                    "truncated, responseText, isCorrect, " +
+                    "questionId, questionYear, questionArea, expectedAnswer) " +
+                    "VALUES (1700000000000, 'dev2-qwen-389', 'questão', 'SIMPLE', " +
+                    "'LOCAL', 0.42, 'logprobs_mean', 'LOCAL', 'EXPLAIN', 113000, " +
+                    "'qwen2.5-1.5b-instruct-q4_k_m', 'offline', 'ginkgo-f8174388', " +
+                    "555, 279, 0, 61393.0, 40495.0, 72000.0, 3.9, 1251, 4, 0, " +
+                    "'Resposta: B', -1, " +
+                    "'questao_01', 2023, 'LC', 'B')"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 6, true, AppMigrations.MIGRATION_5_6)
+
+        db.query(
+            "SELECT sessionId, questionId, latencyMs, confidenceScore FROM routing_log"
+        ).use { c ->
+            assertTrue("a coleta das 389 sumiu na migração", c.moveToFirst())
+            assertEquals(1, c.count)
+            assertEquals("dev2-qwen-389", c.getString(0))
+            assertEquals("questao_01", c.getString(1))
+            assertEquals(113000L, c.getLong(2))
+            assertEquals(0.42, c.getDouble(3), 1e-6)
+        }
+
+        // As linhas antigas não têm política — e têm que aparecer assim. Os defaults
+        // repetem a convenção do projeto: -1 é "indisponível", nunca 0. Um `preScore` 0
+        // seria lido pela análise como "o modelo pontuou zero", que é uma afirmação falsa.
+        db.query(
+            "SELECT policyName, preScore, cascadeScore, escalated, policyDecisionMs, " +
+                "escalationLatencyMs FROM routing_log"
+        ).use { c ->
+            assertTrue(c.moveToFirst())
+            assertTrue("policyName deveria ser nulo numa linha pré-política", c.isNull(0))
+            assertEquals("preScore tem que ser -1, não 0", -1.0, c.getDouble(1), 1e-9)
+            assertEquals("cascadeScore tem que ser -1, não 0", -1.0, c.getDouble(2), 1e-9)
+            assertEquals(0, c.getInt(3))
+            assertEquals(-1L, c.getLong(4))
+            assertEquals(-1L, c.getLong(5))
+        }
     }
 
     private companion object {

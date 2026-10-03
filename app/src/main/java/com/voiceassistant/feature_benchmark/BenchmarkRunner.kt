@@ -16,6 +16,10 @@ import com.voiceassistant.domain.repository.InferenceRepository
 import com.voiceassistant.feature_benchmark.data.EnemDataset
 import com.voiceassistant.feature_benchmark.data.EnemPromptBuilder
 import com.voiceassistant.feature_benchmark.data.EnemQuestion
+import com.voiceassistant.feature_tutor.policy.InferenceRouter
+import com.voiceassistant.feature_tutor.policy.PromptComplexityAnalyzer
+import com.voiceassistant.feature_tutor.policy.RoutingPolicy
+import com.voiceassistant.feature_tutor.policy.RoutingPolicyConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -49,7 +53,9 @@ class BenchmarkRunner @Inject constructor(
     private val deviceProfileProvider: DeviceProfileProvider,
     // Para registrar na `block_energy` qual modelo de fato respondeu — se o fallback
     // assumiu, é dele a energia medida.
-    private val localService: LocalInferenceService
+    private val localService: LocalInferenceService,
+    /** Só usado quando a coleta mede uma política: sem ela, a complexidade é fixa. */
+    private val complexityAnalyzer: PromptComplexityAnalyzer = PromptComplexityAnalyzer()
 ) {
     private val _progress = MutableStateFlow<BenchmarkProgress>(BenchmarkProgress.Idle)
     val progress: StateFlow<BenchmarkProgress> = _progress.asStateFlow()
@@ -89,6 +95,30 @@ class BenchmarkRunner @Inject constructor(
     }
 
     private suspend fun runBattery(config: BenchmarkConfig): BenchmarkReport {
+        // A política é condição da EXECUÇÃO, não da pergunta: fica no roteador durante a
+        // bateria inteira, e volta ao default no fim para não vazar para o uso normal do
+        // app depois de uma coleta.
+        val roteador = inferenceRepository as? InferenceRouter
+        if (config.policy != null && roteador == null) {
+            val motivo = "config pede a política ${config.policy}, mas o " +
+                "InferenceRepository não é um InferenceRouter — a coleta mediria a " +
+                "política errada em silêncio"
+            Log.e(TAG, motivo)
+            _progress.value = BenchmarkProgress.Failed(motivo)
+            return BenchmarkReport(config, emptyList(), listOf(motivo))
+        }
+        roteador?.policyConfig = RoutingPolicyConfig(
+            policy = config.policy ?: RoutingPolicy.HEURISTIC,
+            budgetFraction = config.budgetFraction
+        )
+        return try {
+            runBatteryInterno(config)
+        } finally {
+            roteador?.policyConfig = RoutingPolicyConfig.DEFAULT
+        }
+    }
+
+    private suspend fun runBatteryInterno(config: BenchmarkConfig): BenchmarkReport {
         // Subconjunto fixo tem precedência sobre a amostragem: quando a coleta precisa
         // casar questão a questão com uma feita fora do aparelho, sortear de novo aqui —
         // ainda que com a mesma seed — produziria outro conjunto, e a comparação pareada
@@ -189,6 +219,21 @@ class BenchmarkRunner @Inject constructor(
         }
 
         val responses = tallyResponses(config.runLabel)
+        // As DUAS leituras da energia, como o desenho pediu.
+        //
+        // Com política, um bloco de 20 questões pode misturar tiers: algumas ficaram no
+        // local, outras escalaram. A energia POR BLOCO deixa de ser atribuível a um tier —
+        // mas continua sendo o número certo para o Pareto, porque o que se compara é o
+        // custo da POLÍTICA como um todo, não o de um tier isolado.
+        //
+        // A quebra por tier fica disponível ao lado, para quem quiser separar. Ela é uma
+        // ATRIBUIÇÃO, não uma medição: rateia a energia do bloco pelas questões, o que
+        // supõe custo uniforme dentro dele. Basta para ordem de grandeza e não serve para
+        // afirmar consumo de tier — por isso vai rotulada.
+        val porTier = tallyPorTier(config.runLabel)
+        if (porTier.isNotEmpty()) {
+            Log.i(TAG, "distribuição de tiers: $porTier")
+        }
         _progress.value = BenchmarkProgress.Done(completed, plan.size, errors.size)
         Log.i(TAG, "Bateria concluída: $completed/${plan.size}, ${errors.size} falhas")
         Log.i(TAG, "Respostas: $responses")
@@ -323,6 +368,26 @@ class BenchmarkRunner @Inject constructor(
      * Lê de volta da tabela em vez de acumular em memória, para que o número do
      * relatório seja exatamente o que está no CSV.
      */
+    /**
+     * Quantas questões terminaram em cada tier, e quantas escalaram por política.
+     *
+     * É o denominador da "fração escalada" — o eixo de custo do Pareto. Vem da
+     * `routing_log`, e não de contadores em memória, para que o número do relatório seja
+     * exatamente o que está no CSV.
+     */
+    private suspend fun tallyPorTier(sessionId: String): Map<String, Int> =
+        runCatching {
+            val rows = routingLogDao.getBySession(sessionId).filter { (it.runIndex ?: -1) >= 0 }
+            if (rows.isEmpty()) return emptyMap()
+            val porTier = rows.groupingBy { it.finalTier }.eachCount().toMutableMap()
+            porTier["_escalonadas"] = rows.count { it.escalated }
+            porTier["_total"] = rows.size
+            porTier
+        }.getOrElse {
+            Log.w(TAG, "Falha ao apurar tiers: ${it.message}")
+            emptyMap()
+        }
+
     private suspend fun tallyResponses(sessionId: String): BenchmarkResponses =
         runCatching {
             val rows = routingLogDao.getBySession(sessionId)
@@ -344,14 +409,23 @@ class BenchmarkRunner @Inject constructor(
                 sessionId = config.runLabel,
                 // Prompt cru: a questão já vem no formato do artigo 1.
                 rawPrompt = true,
-                // SIMPLE mantém a rota previsível; a complexidade real do item está no
-                // `difficulty_score` do dataset, não nesta heurística de texto.
-                complexity = PromptComplexity.SIMPLE,
+                // Sem política, SIMPLE mantém a rota previsível — a complexidade real do
+                // item está no `difficulty_score`, não nesta heurística de texto. COM
+                // política, a heurística é justamente uma das coisas medidas, então o
+                // analisador roda de verdade.
+                complexity = if (config.policy == null) {
+                    PromptComplexity.SIMPLE
+                } else {
+                    complexityAnalyzer.analyze(promptBuilder.build(item.question))
+                },
                 blockId = blockId,
                 runIndex = item.runIndex,
                 questionId = item.question.id,
                 questionYear = item.question.year,
                 questionArea = item.question.area,
+                // Quatro das dezoito features do roteador aprendido descrevem as
+                // alternativas. Recuperá-las do prompt montado por regex seria frágil.
+                alternatives = item.question.alternatives,
                 // O gabarito viaja junto para que a linha nasça graduada. Casar resposta
                 // com gabarito depois exigiria reidentificar a questão pelo texto.
                 expectedAnswer = item.question.label
@@ -457,7 +531,24 @@ data class BenchmarkConfig(
     val resumeFromSession: String? = null,
 
     /** Ensaio: calcula o plano, registra o tamanho e encerra sem inferir. */
-    val planOnly: Boolean = false
+    val planOnly: Boolean = false,
+
+    /**
+     * Política de roteamento a medir. Null = comportamento de hoje.
+     *
+     * Quando presente, [BenchmarkRunner.infer] deixa de fixar `complexity = SIMPLE`: a
+     * heurística passa a ser realmente avaliada, e não contornada. Fixar SIMPLE existia
+     * porque a regra 5 nunca deveria disparar numa coleta de tier local puro — com
+     * política, é exatamente o que se quer medir.
+     */
+    val policy: RoutingPolicy? = null,
+
+    /**
+     * Fração das questões que se pretende ESCALAR, em [0,1]. O corte sai dos quantis do
+     * score no treino. É o que torna as políticas comparáveis em CUSTO — um limiar fixo
+     * daria frações diferentes por conjunto, e o Pareto deixaria de ser traçável.
+     */
+    val budgetFraction: Double? = null
 )
 
 /** Resumo da bateria. As linhas por questão ficam na `routing_log`. */

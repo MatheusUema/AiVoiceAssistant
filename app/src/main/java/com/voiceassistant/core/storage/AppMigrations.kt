@@ -152,7 +152,43 @@ object AppMigrations {
         }
     }
 
+    /**
+     * Colunas da POLÍTICA de roteamento (Bloco A, metade b).
+     *
+     * ALTER TABLE de novo, pelo mesmo motivo das migrações 2→3 e 3→4: a `routing_log`
+     * guarda coletas que custaram dias de aparelho, e recriar a tabela as apagaria.
+     *
+     * O que estas colunas acrescentam, e que nenhuma análise offline consegue dar:
+     *  - `policyName` separa as execuções por política, que é o eixo do experimento;
+     *  - `preScore`/`cascadeScore` guardam o número que DECIDIU, permitindo refazer a
+     *    decisão com outro corte sem recoletar;
+     *  - `escalated` distingue escalonamento por POLÍTICA de fallback por FALHA — sem
+     *    isso os dois viram a mesma linha de nuvem no log;
+     *  - `policyDecisionMs` é o custo da própria decisão. É o número que a Fase 1 não pode
+     *    dar: offline não há como saber se o pré-filtro se paga;
+     *  - `escalationLatencyMs` é o tempo do segundo tier, que só existe quando escala.
+     *
+     * Os defaults repetem a convenção do projeto: -1 é "indisponível", nunca 0 — um zero
+     * em `preScore` seria lido pela análise como "o modelo pontuou zero", que é uma
+     * afirmação, e falsa.
+     */
+    val MIGRATION_5_6 = object : Migration(5, 6) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            val colunas = listOf(
+                "`policyName` TEXT",
+                "`preScore` REAL NOT NULL DEFAULT -1.0",
+                "`cascadeScore` REAL NOT NULL DEFAULT -1.0",
+                "`escalated` INTEGER NOT NULL DEFAULT 0",
+                "`policyDecisionMs` INTEGER NOT NULL DEFAULT -1",
+                "`escalationLatencyMs` INTEGER NOT NULL DEFAULT -1"
+            )
+            for (coluna in colunas) {
+                db.execSQL("ALTER TABLE `routing_log` ADD COLUMN $coluna")
+            }
+        }
+    }
+
     /** Todas as migrações, na ordem — passe para o `Room.databaseBuilder`. */
     val ALL: Array<Migration> =
-        arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+        arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
 }

@@ -49,6 +49,20 @@ data class InferenceRequest(
     val questionArea: String? = null,
 
     /**
+     * Alternativas da questão, quando ela é de múltipla escolha.
+     *
+     * O **roteador aprendido** precisa delas: quatro das suas dezoito features descrevem
+     * as alternativas (comprimento médio, desvio, fração de numéricas). Extraí-las de
+     * volta do prompt montado por regex seria frágil — os enunciados têm parênteses e
+     * quebras de linha —, então viajam ao lado dele.
+     *
+     * Vazia no chat, onde não há alternativas: as features saem 0 e o modelo pontua com o
+     * que tem. Isso é uma diferença real entre a bateria e o uso, e entra como ressalva na
+     * análise em vez de ser dissimulada.
+     */
+    val alternatives: List<String> = emptyList(),
+
+    /**
      * Gabarito (A–E) da questão, quando ela tem um. Null fora do modo teste.
      *
      * É só um rótulo carregado junto: o roteador não decide nada com ele, apenas o

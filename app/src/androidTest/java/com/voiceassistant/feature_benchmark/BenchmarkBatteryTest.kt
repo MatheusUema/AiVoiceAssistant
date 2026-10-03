@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.voiceassistant.ai_local.manager.ModelState
+import com.voiceassistant.feature_tutor.policy.RoutingPolicy
 import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -102,6 +103,35 @@ class BenchmarkBatteryTest {
         entryPoint.userSettings().setServerTierEnabled(serverTier)
         Log.i(TAG, "tier servidor = $serverTier" + if (serverTier) " em $serverUrl" else "")
 
+        // Política que ESCALA exige `localOnly=false`, pelo mesmo motivo que o serverTier:
+        // em modo privacidade o roteador força LOCAL (regras 1-2) e nunca sai do aparelho.
+        // A coleta rodaria as 389 inteiras, gastaria as horas de aparelho, e produziria uma
+        // fração escalada de 0% — indistinguível de "a política nunca quis escalar". O
+        // erro é caro e silencioso, então vira `require` antes de começar.
+        //
+        // `scoresOnly=true` é a exceção deliberada, para a VALIDAÇÃO (B.5): ali o que se
+        // quer é registrar os scores que a política produz no aparelho e compará-los com a
+        // simulação offline. Escalonamento seria ruído — gastaria rede, tempo e cota de
+        // nuvem sem acrescentar nada à pergunta. Em modo privacidade nada sai do aparelho e
+        // os scores continuam sendo gravados, porque o roteador os calcula mesmo sem nuvem
+        // para onde ir. É uma corrida de VERIFICAÇÃO, e não de custo: nenhum número de
+        // custo dela vale para o Pareto.
+        val scoresOnly = args.getString("scoresOnly")?.toBooleanStrictOrNull() ?: false
+        val politicaNome = args.getString("policy")?.trim().orEmpty()
+        if (politicaNome.isNotEmpty() && !scoresOnly) {
+            val escalonadora = !politicaNome.equals(RoutingPolicy.ALWAYS_LOCAL.name, true)
+            require(!escalonadora || !localOnly) {
+                "a política '$politicaNome' escala para fora do aparelho e exige " +
+                    "-e localOnly false; em modo privacidade toda questão ficaria no " +
+                    "local e a fração escalada sairia 0% sem que nada indicasse o motivo"
+            }
+        }
+        if (politicaNome.isNotEmpty()) {
+            Log.i(TAG, "política = $politicaNome" +
+                (args.getString("budgetFraction")?.let { " (orçamento $it)" } ?: "") +
+                (if (scoresOnly) " [scoresOnly: verificação, NÃO mede custo]" else ""))
+        }
+
         // O modelo local é carregado pela Application; esperar é obrigatório quando ELE é
         // o tier medido, senão as primeiras questões iriam para a nuvem e mediriam o tier
         // errado.
@@ -138,6 +168,17 @@ class BenchmarkBatteryTest {
             // Subconjunto fixo (asset em `datasets/<nome>.csv`). Com ele, `questionsPerArea`
             // não é usado: rodam exatamente aquelas questões. Ver `EnemDataset.subset`.
             subset = args.getString("subset")?.trim()?.takeIf { it.isNotEmpty() },
+            // Política de roteamento a medir (Bloco A, metade b). Nome inválido é ERRO,
+            // não silêncio: uma coleta de 13 h que roda a política errada por causa de um
+            // typo custa o dia de aparelho inteiro.
+            policy = args.getString("policy")?.trim()?.takeIf { it.isNotEmpty() }?.let { nome ->
+                RoutingPolicy.entries.firstOrNull { it.name.equals(nome, ignoreCase = true) }
+                    ?: throw IllegalArgumentException(
+                        "política '$nome' desconhecida; use uma de " +
+                            RoutingPolicy.entries.joinToString { it.name }
+                    )
+            },
+            budgetFraction = args.getString("budgetFraction")?.toDoubleOrNull(),
             questionsPerArea = args.getString("questionsPerArea")?.toIntOrNull() ?: 1,
             repetitions = args.getString("repetitions")?.toIntOrNull() ?: 1,
             blockSize = args.getString("blockSize")?.toIntOrNull() ?: 20,

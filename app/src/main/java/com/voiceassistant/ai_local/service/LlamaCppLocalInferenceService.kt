@@ -11,6 +11,7 @@ import com.voiceassistant.llama.LlamaModelInfo
 import com.voiceassistant.llama.LlamaParams
 import com.voiceassistant.llama.LlamaStats
 import com.voiceassistant.llama.LlamaStopReason
+import com.voiceassistant.llama.TokenProbSample
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -74,6 +75,22 @@ class LlamaCppLocalInferenceService @Inject constructor(
     /** Métricas cruas da ponte JNI para a última geração. */
     @Volatile
     var lastStats: LlamaStats? = null
+        private set
+
+    /**
+     * Distribuição por token da última geração — entrada da cascata recalibrada.
+     *
+     * Campo à parte, e deliberadamente FORA da [InferenceTelemetry]: aquela estrutura é
+     * escrita na `routing_log`, e uma linha por token viraria mil colunas por questão. O
+     * que a cascata precisa é o resumo (15 estatísticas), calculado em memória a partir
+     * daqui; o que vai ao banco é o score, não a matéria-prima.
+     *
+     * Vazia quando o nativo não produziu amostras — biblioteca antiga ou geração cortada
+     * antes do primeiro token. Vazio é "sem cascata", não "cascata zero": quem consome
+     * tem que distinguir os dois, como o roteador já faz com `confidence == -1`.
+     */
+    @Volatile
+    override var lastTokenProbs: List<TokenProbSample> = emptyList()
         private set
 
     /**
@@ -162,6 +179,7 @@ class LlamaCppLocalInferenceService @Inject constructor(
         try {
             val generation = engine.generate(prompt, params.copy(generationTimeoutMs = timeoutMs))
             lastStats = generation.stats
+            lastTokenProbs = generation.tokenProbs
 
             val stats = generation.stats
             Log.d(
@@ -224,6 +242,7 @@ class LlamaCppLocalInferenceService @Inject constructor(
     override fun unloadModel() {
         engine.unload()
         lastStats = null
+        lastTokenProbs = emptyList()
         loadedModelId = null
         Log.i(TAG, "Modelo descarregado")
     }

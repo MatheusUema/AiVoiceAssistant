@@ -13,6 +13,7 @@ import com.voiceassistant.ai_server.service.ServerResult
 import com.voiceassistant.core.model.InferenceTelemetry
 import com.voiceassistant.ai_server.service.ServerUnavailableException
 import com.voiceassistant.core.device.DeviceProfileProvider
+import com.voiceassistant.core.logging.RoutingLogEntry
 import com.voiceassistant.core.logging.RoutingLogger
 import com.voiceassistant.core.model.InferenceRequest
 import com.voiceassistant.core.model.InferenceResult
@@ -71,8 +72,55 @@ class InferenceRouter @Inject constructor(
     private val promptBuilder: TutorPromptBuilder,
     private val routingLogger: RoutingLogger,
     private val deviceProfileProvider: DeviceProfileProvider,
-    private val ramSampler: ProcessRamSampler = ProcessRamSampler()
+    private val ramSampler: ProcessRamSampler = ProcessRamSampler(),
+    // As políticas aprendidas. Opcionais nos parâmetros para que os testes que constroem
+    // o roteador à mão continuem compilando sem alteração — e porque um app sem os assets
+    // é um app funcional, só sem roteamento aprendido.
+    private val stringFeatures: StringFeatureExtractor = StringFeatureExtractor(),
+    private val logprobFeatures: LogprobFeatureExtractor = LogprobFeatureExtractor(),
+    private val letterExtractor: AnswerLetterExtractor = AnswerLetterExtractor(),
+    private val policies: PolicyCoefficients? = null
 ) : InferenceRepository {
+
+    /**
+     * Política em vigor. Trocada pela bateria de medição (B.4) e pelas settings; o default
+     * é o comportamento de hoje.
+     *
+     * `@Volatile` e não parâmetro do [infer]: a política é uma condição da EXECUÇÃO
+     * inteira, não de uma pergunta. Passá-la por requisição convidaria a misturar
+     * políticas dentro de uma mesma sessão, e a análise por sessão deixaria de fazer
+     * sentido.
+     */
+    @Volatile
+    var policyConfig: RoutingPolicyConfig = RoutingPolicyConfig.DEFAULT
+
+    /**
+     * Score do roteador aprendido para a última requisição, e o corte aplicado.
+     * Existe para a instrumentação da B.4 — a `routing_log` vai registrar os dois.
+     */
+    @Volatile
+    var lastPreScore: Float = PRESCORE_UNAVAILABLE
+        private set
+
+    /** Score da cascata para a última requisição. */
+    @Volatile
+    var lastCascadeScore: Float = PRESCORE_UNAVAILABLE
+        private set
+
+    /** True se a última requisição escalou por decisão de política (não por falha). */
+    @Volatile
+    var lastEscalated: Boolean = false
+        private set
+
+    /** Custo da própria decisão, em ms. É o número que a Fase 1 não pode dar. */
+    @Volatile
+    var lastPolicyDecisionMs: Long = 0L
+        private set
+
+    /** Latência do tier para onde escalou. -1 quando não escalou. */
+    @Volatile
+    var lastEscalationLatencyMs: Long = RoutingLogEntry.UNAVAILABLE_LONG
+        private set
 
     override suspend fun infer(request: InferenceRequest): InferenceResult {
         val settings = userSettingsDataStore.settings.first()
@@ -93,13 +141,29 @@ class InferenceRouter @Inject constructor(
             false
         }
 
+        // O custo da decisão é cronometrado à parte da inferência: é ele que responde se
+        // o pré-filtro se paga. Um roteador que gasta 200 ms para evitar 30 s de nuvem é
+        // um bom negócio; um que gasta 2 s não é, e sem medir não há como saber.
+        val policy = policyConfig.policy
+        val decisaoInicio = System.nanoTime()
+        val preScore = calculaPreScore(request, policy)
+        val corte = cortePre(policy)
+        lastPolicyDecisionMs = (System.nanoTime() - decisaoInicio) / 1_000_000
+        lastPreScore = preScore
+        lastCascadeScore = PRESCORE_UNAVAILABLE
+        lastEscalated = false
+        lastEscalationLatencyMs = RoutingLogEntry.UNAVAILABLE_LONG
+
         val decision = InferenceRouter.resolveRoute(
             isOnline = isOnline,
             isLocalAvailable = isLocalAvailable,
             isServerAvailable = isServerAvailable,
             isCloudAvailable = isCloudAvailable,
             complexity = request.complexity,
-            privacyMode = settings.privacyModeEnabled
+            privacyMode = settings.privacyModeEnabled,
+            policy = policy,
+            preScore = preScore,
+            preScoreThreshold = corte
         )
 
         val isCompact = decision.usesCompactPrompt
@@ -228,7 +292,16 @@ class InferenceRouter @Inject constructor(
                 // — medido: 2 de 4 respostas do Qwen foram atribuídas a alternativas que
                 // o modelo tinha acabado de descartar. A classificação é manual.
                 responseText = failureReason?.let { "[FALHA] $it" } ?: result.text,
-                expectedAnswer = request.expectedAnswer
+                expectedAnswer = request.expectedAnswer,
+                // A política e os scores que a decidiram. Sem isto a linha registra QUE
+                // rota foi tomada, mas não POR QUE — e refazer a decisão com outro corte
+                // exigiria recoletar.
+                policyName = policyConfig.policy.name,
+                preScore = lastPreScore,
+                cascadeScore = lastCascadeScore,
+                escalated = lastEscalated,
+                policyDecisionMs = lastPolicyDecisionMs,
+                escalationLatencyMs = lastEscalationLatencyMs
             )
         } catch (e: Exception) {
             Log.w(TAG, "Falha ao registrar log de roteamento: ${e.message}")
@@ -254,6 +327,10 @@ class InferenceRouter @Inject constructor(
 
     companion object {
         private const val TAG = "InferenceRouter"
+
+        /** Assets das políticas treinadas na Fase 1. */
+        private const val POLICY_ROTEADOR = "roteador-v1"
+        private const val POLICY_CASCATA = "cascata-v1"
         private val TUTOR_PREFIX = Regex("""^Tutor\s*:\s*""", RegexOption.IGNORE_CASE)
         private val ECHO_WITH_TUTOR = Regex(
             """^.{1,500}?\n\s*Tutor\s*:\s*""",
@@ -267,13 +344,32 @@ class InferenceRouter @Inject constructor(
          * Todos os inputs são parâmetros, facilitando testes unitários exaustivos.
          * Pode ser chamada via `InferenceRouter.resolveRoute(...)` sem instância.
          */
+        /**
+         * Score indisponível — a política cai na heurística.
+         *
+         * Mesma convenção do `confidence == -1` que `runServer` já usa para não escalar:
+         * um sinal ausente devolve o comportamento anterior, e nunca uma decisão tomada
+         * sobre um número inventado.
+         */
+        const val PRESCORE_UNAVAILABLE = -1f
+
         fun resolveRoute(
             isOnline: Boolean,
             isLocalAvailable: Boolean,
             isServerAvailable: Boolean,
             isCloudAvailable: Boolean,
             complexity: PromptComplexity,
-            privacyMode: Boolean
+            privacyMode: Boolean,
+            /**
+             * Qual política decide. O default é [RoutingPolicy.HEURISTIC], o
+             * comportamento de hoje — é o que permite que toda a matriz de testes já
+             * existente continue valendo sem uma linha alterada.
+             */
+            policy: RoutingPolicy = RoutingPolicy.HEURISTIC,
+            /** Score do roteador aprendido; [PRESCORE_UNAVAILABLE] quando não há. */
+            preScore: Float = PRESCORE_UNAVAILABLE,
+            /** Corte de orçamento: escala quem fica ABAIXO. */
+            preScoreThreshold: Float = 0.5f
         ): RoutingDecision = when {
         // Regras 1-2: Modo privacidade — dados nunca saem do dispositivo.
         // Servidor (LAN) e cloud enviam dados para fora → só local é permitido.
@@ -285,7 +381,26 @@ class InferenceRouter @Inject constructor(
         !isOnline && !isServerAvailable && isLocalAvailable -> RoutingDecision.LOCAL
         !isOnline && !isServerAvailable -> RoutingDecision.ERROR_OFFLINE
 
-        // Regra 5: Pergunta complexa + cloud → cloud diretamente (modelo grande)
+        // Baselines: os pisos e tetos do Pareto. Vêm DEPOIS das regras de privacidade e
+        // offline de propósito — "sempre nuvem" não pode furar o modo privacidade, senão
+        // a política deixaria de ser uma escolha de custo e passaria a ser uma violação.
+        policy == RoutingPolicy.ALWAYS_LOCAL && isLocalAvailable -> RoutingDecision.LOCAL
+        policy == RoutingPolicy.ALWAYS_CLOUD && isCloudAvailable -> RoutingDecision.CLOUD
+
+        // Regra 5, versão APRENDIDA: escala quem o modelo julga que o local vai errar.
+        // O score aponta para cima (alto = local provavelmente acerta), então o corte é
+        // por BAIXO — inverter aqui produziria uma política que escala exatamente o que o
+        // local acertaria, pior que não rotear.
+        //
+        // `preScore` indisponível cai na heurística abaixo, sem ramo próprio: é a mesma
+        // degradação graciosa do `confidence == -1` em `runServer`.
+        policy.needsPreScore && isCloudAvailable &&
+            preScore != PRESCORE_UNAVAILABLE && preScore < preScoreThreshold ->
+            RoutingDecision.CLOUD
+
+        // Regra 5 original (heurística). Continua valendo para HEURISTIC, para
+        // ORACLE_IRT (que não é implantável e é tratada como heurística se chegar aqui),
+        // e como fallback de LEARNED quando o score não veio.
         complexity == PromptComplexity.COMPLEX && isCloudAvailable -> RoutingDecision.CLOUD
 
         // Regras 6-7: Servidor na LAN disponível → usa servidor (com logprobs).
@@ -313,11 +428,14 @@ class InferenceRouter @Inject constructor(
         decision: RoutingDecision,
         prompt: String
     ): InferenceResult = when (decision) {
-        RoutingDecision.LOCAL -> runLocal(prompt)
+        // A cascata só entra onde o local de fato roda. Nos demais ramos não há
+        // distribuicao de logprobs do local para recalibrar.
+        RoutingDecision.LOCAL -> aplicaCascata(runLocal(prompt), prompt)
         RoutingDecision.CLOUD -> runCloud(prompt)
         RoutingDecision.SERVER -> runServer(prompt, allowCloudEscalation = false)
         RoutingDecision.SERVER_WITH_CLOUD_ESCALATION -> runServer(prompt, allowCloudEscalation = true)
-        RoutingDecision.LOCAL_WITH_CLOUD_FALLBACK -> runLocalWithCloudFallback(prompt)
+        RoutingDecision.LOCAL_WITH_CLOUD_FALLBACK ->
+            aplicaCascata(runLocalWithCloudFallback(prompt), prompt)
         RoutingDecision.LOCAL_WITH_SERVER_FALLBACK -> runLocalWithServerFallback(prompt)
 
         RoutingDecision.ERROR_PRIVACY -> throw PrivacyModeException(
@@ -332,6 +450,144 @@ class InferenceRouter @Inject constructor(
             "Nenhum serviço de IA configurado. " +
                     "Configure o Firebase AI Logic ou o modelo local offline."
         )
+    }
+
+    // ── Políticas ─────────────────────────────────────────────────────────────
+
+    /**
+     * Score do roteador aprendido, ANTES de inferir.
+     *
+     * Devolve [PRESCORE_UNAVAILABLE] quando a política não o pede, quando os coeficientes
+     * não estão nos assets, ou quando o cálculo falha. Nunca lança: um roteador que
+     * derruba a resposta do aluno porque um asset está malformado seria pior que um
+     * roteador que não roteia.
+     *
+     * A ÁREA só existe na bateria de medição, onde vem do metadata do dataset — em uso
+     * real não há classificador de área, e as quatro features one-hot ficam zeradas. Isso
+     * NÃO é equivalente ao que o modelo viu no treino, então a medição on-device com área
+     * é um teto que um sistema implantado não alcança. A comparação com/sem área é
+     * justamente uma das medidas do Bloco A.
+     */
+    private fun calculaPreScore(request: InferenceRequest, policy: RoutingPolicy): Float {
+        if (!policy.needsPreScore) return PRESCORE_UNAVAILABLE
+        val modelo = policies?.load(POLICY_ROTEADOR) ?: return PRESCORE_UNAVAILABLE
+        return runCatching {
+            // No caminho da bateria o prompt já vem montado (`rawPrompt`), então o
+            // invólucro precisa sair; no chat o texto do aluno já é o cru, e
+            // `enunciadoCru` não encontra nada para remover.
+            val cru = stringFeatures.enunciadoCru(request.prompt)
+            val f = stringFeatures.extract(cru, request.alternatives, request.questionArea)
+            modelo.score(f).toFloat()
+        }.getOrElse {
+            Log.w(TAG, "pré-score indisponível (${it.message}); caindo na heurística")
+            PRESCORE_UNAVAILABLE
+        }
+    }
+
+    /** Corte de orçamento para o roteador aprendido. */
+    private fun cortePre(policy: RoutingPolicy): Float {
+        if (!policy.needsPreScore) return 0.5f
+        val modelo = policies?.load(POLICY_ROTEADOR) ?: return 0.5f
+        val fracao = policyConfig.budgetFraction
+        return (fracao?.let { modelo.corteParaOrcamento(it) }
+            ?: modelo.limiar?.referencia_mediana_treino
+            ?: 0.5).toFloat()
+    }
+
+    /**
+     * Score da cascata, DEPOIS de inferir no local.
+     *
+     * Usa o modelo recalibrado sobre 17 estatísticas da distribuição de logprobs — e
+     * **não** a confiança crua, que é apenas uma delas e a que a Fase 1 mostrou ser a mais
+     * fraca. Devolve [PRESCORE_UNAVAILABLE] quando o tier não expôs a distribuição, ou
+     * quando a resposta é curta demais para sustentar estatística (o extrator devolve null,
+     * o mesmo `continue` do Python).
+     *
+     * A LETRA vem do [AnswerLetterExtractor] sobre o texto gerado: é a alternativa que o
+     * MODELO cravou, a mesma grandeza que o treino usou (lá pela leitura humana, aqui pelo
+     * extrator automático, que concordam em ~99%). Quando o modelo não fecha no formato
+     * pedido, o extrator devolve null e `conf_letra_b1` cai no fallback — o MESMO caminho
+     * que o treino já percorria quando não havia letra. A ressalva está documentada em
+     * [AnswerLetterExtractor].
+     */
+    private fun calculaCascadeScore(respostaLocal: String): Float {
+        val modelo = policies?.load(POLICY_CASCATA) ?: return PRESCORE_UNAVAILABLE
+        val amostras = localService.lastTokenProbs
+        if (amostras.isEmpty()) return PRESCORE_UNAVAILABLE
+        return runCatching {
+            // A letra que o MODELO cravou, lida do texto — não o gabarito, que em runtime
+            // não existe e que, se usado, vazaria o rótulo para dentro da feature.
+            val letra = letterExtractor.extract(respostaLocal)
+            val f = logprobFeatures.extract(amostras.toTokenDistributions(), letra = letra)
+                ?: return PRESCORE_UNAVAILABLE
+            modelo.score(f).toFloat()
+        }.getOrElse {
+            Log.w(TAG, "score da cascata indisponível (${it.message})")
+            PRESCORE_UNAVAILABLE
+        }
+    }
+
+    /** Corte de orçamento para a cascata. */
+    private fun corteCascata(): Float {
+        val modelo = policies?.load(POLICY_CASCATA) ?: return 0.5f
+        val fracao = policyConfig.budgetFraction
+        return (fracao?.let { modelo.corteParaOrcamento(it) }
+            ?: modelo.limiar?.referencia_mediana_treino
+            ?: 0.5).toFloat()
+    }
+
+    /**
+     * A cascata: depois da resposta local, decide se vale reperguntar à nuvem.
+     *
+     * Isto LIGA o escalonamento no caminho local, que estava desativado por decisão
+     * explícita ("a política de escalonamento por confiança é do tier servidor... mudar a
+     * política é decisão à parte, com dados"). Os dados são a Fase 1, e a mudança é
+     * governada por [RoutingPolicyConfig] — não é um novo default.
+     *
+     * O custo do local **já foi pago** quando esta função roda. É a diferença essencial
+     * para o roteador aprendido, e é o que o Pareto tem que mostrar: a cascata decide
+     * melhor e gasta mais.
+     */
+    private suspend fun aplicaCascata(local: InferenceResult, prompt: String): InferenceResult {
+        if (!policyConfig.policy.needsCascade) return local
+
+        // O score é calculado SEMPRE que a política o pede, mesmo sem nuvem para onde
+        // escalar. Ele é telemetria: é o número que a `routing_log` registra e que permite
+        // refazer a decisão com outro corte sem recoletar. Condicioná-lo à nuvem faria a
+        // validação em modo privacidade — a única que roda sem rede — devolver linhas sem
+        // score, e a validação mediria a ausência de nuvem em vez do extrator.
+        val score = calculaCascadeScore(local.text)
+        lastCascadeScore = score
+        if (score == PRESCORE_UNAVAILABLE) return local
+
+        val corte = corteCascata()
+        if (score >= corte) return local
+
+        // Daqui para baixo a política QUER escalar. Só agora a nuvem importa.
+        if (!cloudService.isAvailable) {
+            Log.i(TAG, "cascata: score %.3f < %.3f, mas sem nuvem — fica o local"
+                .format(score, corte))
+            return local
+        }
+
+        Log.i(TAG, "cascata: score %.3f < %.3f — escalando para a nuvem".format(score, corte))
+        return try {
+            lastEscalated = true
+            val t0 = System.currentTimeMillis()
+            // Preserva o score medido no local, como `runServer` preserva a confiança:
+            // sem isso, a linha da nuvem no log não diz POR QUE escalou.
+            val r = runCloud(prompt).copy(confidence = local.confidence)
+            // A latência do escalonamento é medida À PARTE da latência total: o Pareto
+            // precisa saber quanto do tempo foi o local (já gasto) e quanto foi a nuvem.
+            lastEscalationLatencyMs = System.currentTimeMillis() - t0
+            r
+        } catch (e: Exception) {
+            // A nuvem falhar não pode custar a resposta que o local JÁ produziu.
+            Log.w(TAG, "escalonamento da cascata falhou (${e.message}); fica o local")
+            lastEscalated = false
+            lastEscalationLatencyMs = RoutingLogEntry.UNAVAILABLE_LONG
+            local
+        }
     }
 
     /**

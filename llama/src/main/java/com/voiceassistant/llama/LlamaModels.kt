@@ -164,6 +164,70 @@ data class LlamaStats(
 }
 
 /**
+ * Uma posição gerada, vista pela distribuição de saída do modelo.
+ *
+ * É a matéria-prima da **cascata recalibrada** (Fase 1, etapa C): as 15 estatísticas que
+ * batem a confiança crua saem daqui — mínimo, p10, p25, desvio, entropia, margem, média
+ * dos últimos 10. A [LlamaStats.confidence] é a média de [prob] sobre a resposta inteira,
+ * ou seja UMA das 15, e justamente a mais fraca.
+ *
+ * Não vai para a [com.voiceassistant.core.model.InferenceTelemetry]: aquela estrutura é
+ * persistida na `routing_log`, e uma linha por token viraria mil colunas. Estas amostras
+ * são consumidas em memória, resumidas em features, e descartadas.
+ */
+data class TokenProbSample(
+    /** Probabilidade do token **escolhido** — não a do mais provável. */
+    val prob: Double,
+    /**
+     * Probabilidades dos [TOP_PROBS] candidatos mais prováveis, em ordem decrescente e
+     * **sem renormalizar** — são probabilidades reais do softmax, como as que o
+     * `llama-server` devolve em `completion_probabilities`.
+     *
+     * A renormalização sobre estes k é feita pelo extrator da cascata, para os dois tiers
+     * no mesmo lugar. Fazê-la aqui esconderia a etapa e deixaria a entropia do tier local
+     * incomparável com a do servidor.
+     */
+    val topProbs: List<Double>,
+    /**
+     * Texto do token escolhido, quando o runtime o expõe. Vazio quando não —
+     * `conf_letra_b1` então cai no fallback definido pelo Python.
+     */
+    val token: String = ""
+) {
+    companion object {
+        /** Candidatos por posição — espelha `kTopProbs` e o `n_probs` do ServerConfig. */
+        const val TOP_PROBS = 5
+
+        /**
+         * Doubles por token no array achatado que vem do JNI: a do escolhido + [TOP_PROBS].
+         * Espelha `kTokenSampleStride` em `llama_bridge.cpp`.
+         */
+        const val STRIDE = 1 + TOP_PROBS
+
+        /** Desempacota o array achatado do JNI. Sobra incompleta no fim é descartada. */
+        fun fromFlat(values: DoubleArray?, tokens: Array<String>? = null): List<TokenProbSample> {
+            if (values == null || values.size < STRIDE) return emptyList()
+            val n = values.size / STRIDE
+            // As duas listas nascem alinhadas por índice no lado nativo (a string só é
+            // empilhada quando a amostra numérica é). Se ainda assim vierem com tamanhos
+            // diferentes — biblioteca antiga que não exporta as strings, por exemplo — o
+            // texto é abandonado em vez de pareado por posição: um pareamento deslocado
+            // faria `conf_letra_b1` ler a probabilidade de OUTRO token, o que é pior que
+            // não ter a feature.
+            val alinhado = tokens != null && tokens.size == n
+            return List(n) { i ->
+                val base = i * STRIDE
+                TokenProbSample(
+                    prob = values[base],
+                    topProbs = List(TOP_PROBS) { k -> values[base + 1 + k] },
+                    token = if (alinhado) tokens!![i] else ""
+                )
+            }
+        }
+    }
+}
+
+/**
  * Resultado de uma geração: a **resposta** (contrato atual) + telemetria em paralelo.
  *
  * [text] já vem sem o canal de raciocínio — é o que se mostra ao aluno. O pensamento
@@ -172,7 +236,13 @@ data class LlamaStats(
 data class LlamaGeneration(
     val text: String,
     val stats: LlamaStats,
-    val reasoning: String = ""
+    val reasoning: String = "",
+    /**
+     * Distribuição por token, para a cascata. Vazia quando o nativo não a produziu —
+     * biblioteca antiga, geração cancelada antes do primeiro token, ou modelo servido por
+     * um runtime que não expõe logits. Vazio significa "sem cascata", não "cascata zero".
+     */
+    val tokenProbs: List<TokenProbSample> = emptyList()
 )
 
 /**

@@ -34,7 +34,7 @@ import com.voiceassistant.core.model.ChatMessage
         DeviceProfileEntry::class,
         BlockEnergyEntry::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = true   // permite versionamento das migrações em /schemas
 )
 @TypeConverters(Converters::class)

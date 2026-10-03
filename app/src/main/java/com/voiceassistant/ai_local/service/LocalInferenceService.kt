@@ -36,6 +36,19 @@ interface LocalInferenceService {
      */
     suspend fun generate(prompt: String, timeoutMs: Long): String = generate(prompt)
 
+    /**
+     * Distribuição por token da última geração — entrada da **cascata**.
+     *
+     * Vazia por padrão: um runtime que não expõe logits (o MediaPipe antigo) não é um
+     * erro, é um tier sem cascata. Quem consome distingue vazio de "cascata zero", como o
+     * roteador já faz com `confidence == -1`.
+     *
+     * Fica FORA da [com.voiceassistant.core.model.InferenceTelemetry] de propósito:
+     * aquela estrutura vai para a `routing_log`, e uma linha por token viraria mil colunas.
+     */
+    val lastTokenProbs: List<com.voiceassistant.llama.TokenProbSample>
+        get() = emptyList()
+
     /** True se o modelo está carregado e pronto para [generate]. */
     val isModelLoaded: Boolean
 
