@@ -50,7 +50,10 @@ class SendMessageUseCase @Inject constructor(
             sessionId = sessionId,
             conversationHistory = history,
             complexity = complexity,
-            tutorMode = tutorMode
+            tutorMode = tutorMode,
+            // É o caminho de chat que quer o eixo vertical na tela. A bateria de medição
+            // não liga este flag, e por isso não paga nada por ele.
+            deriveResponseMode = true
         )
 
         val result = inferenceRepository.infer(request)
@@ -60,7 +63,11 @@ class SendMessageUseCase @Inject constructor(
             role = MessageRole.ASSISTANT,
             content = result.text,
             inferenceSource = result.source,
-            latencyMs = result.latencyMs
+            latencyMs = result.latencyMs,
+            // Persistido, e não só devolvido: a UI lê a conversa do Room, não do retorno
+            // desta função (que só alimenta o TTS). Sem gravar, a bandeira apareceria e
+            // desapareceria ao recarregar a sessão.
+            responseMode = result.responseMode
         )
         chatRepository.saveMessage(assistantMessage)
 

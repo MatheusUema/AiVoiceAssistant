@@ -79,7 +79,10 @@ class InferenceRouter @Inject constructor(
     private val stringFeatures: StringFeatureExtractor = StringFeatureExtractor(),
     private val logprobFeatures: LogprobFeatureExtractor = LogprobFeatureExtractor(),
     private val letterExtractor: AnswerLetterExtractor = AnswerLetterExtractor(),
-    private val policies: PolicyCoefficients? = null
+    private val policies: PolicyCoefficients? = null,
+    // O eixo vertical (Bloco D parte 1). Com default, como os extratores acima, para que
+    // os testes que montam o roteador à mão sigam compilando sem alteração.
+    private val responseModeResolver: ResponseModeResolver = ResponseModeResolver()
 ) : InferenceRepository {
 
     /**
@@ -200,9 +203,67 @@ class InferenceRouter @Inject constructor(
             throw e
         }
 
-        logRouting(request, decision, result, isOnline, isServerAvailable, effectiveServerBaseUrl)
+        // O eixo vertical entra DEPOIS da execução e ANTES do log: a faixa descreve a
+        // resposta que já saiu, não a rota que a produziu.
+        val comModo = aplicaModoResposta(request, result)
 
-        return result
+        logRouting(request, decision, comModo, isOnline, isServerAvailable, effectiveServerBaseUrl)
+
+        return comModo
+    }
+
+    /**
+     * Deriva o [com.voiceassistant.core.model.ResponseMode] da resposta — o eixo
+     * vertical que a interface do Bloco D parte 1 exibe.
+     *
+     * ## O que esta função deliberadamente NÃO faz
+     *
+     * Não toca em [lastCascadeScore], [lastEscalated] nem em nenhuma coluna da
+     * `routing_log`, e não consulta [policyConfig]. Isso é contenção, não descuido: aquelas
+     * são a telemetria do **eixo experimental** do Bloco A, e populá-las a partir do chat
+     * mudaria o significado da coluna para as linhas de pesquisa. A bateria de medição
+     * segue byte a byte como era — ela não liga
+     * [InferenceRequest.deriveResponseMode], então nem entra aqui.
+     *
+     * O **score vai para o logcat**, e é de propósito: a tela não mostra número ao aluno
+     * (uma cifra ali convidaria a interpretá-la, e o Bloco D parte 1 é demonstração, não
+     * medida), mas a legenda de cada print precisa poder citar o score que produziu aquela
+     * faixa. O logcat é onde ele fica recuperável durante a captura.
+     *
+     * ## Por que só o tier local
+     *
+     * O score sai de [localService]`.lastTokenProbs`, que é preenchido pela geração local.
+     * Se a rota foi servidor ou nuvem, aquele campo pode conter a distribuição de uma
+     * geração local **anterior** — pontuar com ela daria um número plausível sobre a
+     * resposta errada. A guarda por [InferenceSource.LOCAL] é o que impede isso.
+     */
+    private fun aplicaModoResposta(
+        request: InferenceRequest,
+        result: InferenceResult
+    ): InferenceResult {
+        if (!request.deriveResponseMode) return result
+        if (result.source != InferenceSource.LOCAL) return result
+
+        val modelo = policies?.load(POLICY_CASCATA) ?: return result
+        val inicio = System.nanoTime()
+        val score = calculaCascadeScore(result.text)
+        val modo = responseModeResolver.resolve(score, modelo)
+        val custoMs = (System.nanoTime() - inicio) / 1_000_000
+
+        if (modo == null) {
+            // Sem faixa não há bandeira — o comportamento anterior. Registrado em nível
+            // de info porque, na captura, "por que esta resposta não tem modo?" é a
+            // primeira pergunta que aparece.
+            Log.i(TAG, "modo pedagógico indisponível (score=$score, ${custoMs}ms)")
+            return result
+        }
+
+        Log.i(TAG, "modo pedagógico: $modo | score=${"%.4f".format(score)} " +
+            "| cortes ${"%.4f".format(modelo.corteParaOrcamento(ResponseModeResolver.FRACAO_MEDIAR))}" +
+            "/${"%.4f".format(modelo.corteParaOrcamento(ResponseModeResolver.FRACAO_DIRETO))} " +
+            "| ${custoMs}ms")
+
+        return result.copy(responseMode = modo)
     }
 
     /**

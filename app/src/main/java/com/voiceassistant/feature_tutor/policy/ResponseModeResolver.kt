@@ -1,9 +1,10 @@
 package com.voiceassistant.feature_tutor.policy
 
-import com.voiceassistant.core.model.PedagogicalMode
+import com.voiceassistant.core.model.ResponseMode
+import javax.inject.Inject
 
 /**
- * Traduz o score da **cascata recalibrada** em um [PedagogicalMode] — o eixo vertical da
+ * Traduz o score da **cascata recalibrada** em um [ResponseMode] — o eixo vertical da
  * elasticidade (Bloco D parte 1).
  *
  * Função pura, sem Android e sem estado: o score entra, a faixa sai. É o que permite
@@ -29,7 +30,7 @@ import com.voiceassistant.core.model.PedagogicalMode
  * asset for retreinado, os cortes acompanham sem edição de código.
  *
  * **A consequência, e ela não pode ser dissimulada na figura:** sob corte por orçamento,
- * uma **fração fixa** das perguntas cai em [PedagogicalMode.MEDIAR] — por construção, cerca
+ * uma **fração fixa** das perguntas cai em [ResponseMode.MEDIAR] — por construção, cerca
  * de um décimo —, *independentemente de o dia ter sido bom ou ruim*. O corte é um quantil
  * da distribuição de treino, não um juízo absoluto sobre a resposta. Portanto isto **não**
  * pode ser apresentado como "o sistema desiste quando a resposta é ruim": ele reserva uma
@@ -40,12 +41,12 @@ import com.voiceassistant.core.model.PedagogicalMode
  * ## Ausência de sinal não é um modo
  *
  * Sem asset, sem `limiar` no asset, ou com score indisponível, o resolvedor devolve
- * **null** — e a UI não mostra bandeira nenhuma. Nunca um modo default: [PedagogicalMode]
+ * **null** — e a UI não mostra bandeira nenhuma. Nunca um modo default: [ResponseMode]
  * é uma afirmação sobre a resposta, e um default inventaria uma faixa que não foi
  * calibrada. É a mesma degradação graciosa de [PolicyCoefficients], onde um app sem os
  * assets continua funcional, só sem roteamento aprendido.
  */
-class PedagogicalModeResolver {
+class ResponseModeResolver @Inject constructor() {
 
     /**
      * @param score score da cascata em [0,1]; [InferenceRouter.PRESCORE_UNAVAILABLE] (-1)
@@ -53,7 +54,7 @@ class PedagogicalModeResolver {
      * @param modelo a política `cascata-v1` carregada dos assets, ou null se ausente.
      * @return a faixa, ou **null** quando não há sinal em que se apoiar.
      */
-    fun resolve(score: Float, modelo: PolicyModel?): PedagogicalMode? {
+    fun resolve(score: Float, modelo: PolicyModel?): ResponseMode? {
         if (modelo == null) return null
         // Score fora de [0,1] não é faixa: cobre a sentinela -1 e qualquer NaN que
         // escapasse do extrator. `!(score in 0f..1f)` em vez de `<0 || >1` porque NaN
@@ -76,21 +77,21 @@ class PedagogicalModeResolver {
         if (corteMediar >= corteDireto) return null
 
         return when {
-            score >= corteDireto -> PedagogicalMode.DIRETO
-            score >= corteMediar -> PedagogicalMode.RESSALVA
-            else -> PedagogicalMode.MEDIAR
+            score >= corteDireto -> ResponseMode.DIRETO
+            score >= corteMediar -> ResponseMode.RESSALVA
+            else -> ResponseMode.MEDIAR
         }
     }
 
     companion object {
         /**
-         * Fração de orçamento que separa [PedagogicalMode.DIRETO] do resto — o quantil
+         * Fração de orçamento que separa [ResponseMode.DIRETO] do resto — o quantil
          * 0,5, isto é, a mediana dos scores do treino (≈0,634 na `cascata-v1`).
          */
         const val FRACAO_DIRETO = 0.5
 
         /**
-         * Fração reservada a [PedagogicalMode.MEDIAR] — o quantil 0,1 (≈0,285 na
+         * Fração reservada a [ResponseMode.MEDIAR] — o quantil 0,1 (≈0,285 na
          * `cascata-v1`). Mediação é **rara por construção**, e é isto que a torna legível
          * quando acontece.
          */

@@ -213,6 +213,53 @@ class MigrationTest {
         }
     }
 
+    /**
+     * v6→v7: o eixo VERTICAL na `chat_messages` (Bloco D parte 1).
+     *
+     * Aqui o que está em risco não é coleta de pesquisa, é a **conversa de quem usa o
+     * aplicativo**. Recriar a tabela apagaria o histórico, então a migração é por ALTER
+     * TABLE e este teste garante isso.
+     *
+     * A segunda metade é o ponto delicado: a coluna nova tem de nascer **nula** nas linhas
+     * antigas. Um default de `'DIRETO'` afirmaria retroativamente que todas as respostas
+     * anteriores foram entregues sem ressalva — verdade na tela de então, mas afirmaria
+     * também que **houve uma decisão** de não ressalvar, e não houve. Null é o único valor
+     * que diz "esta mensagem não tem faixa".
+     */
+    @Test
+    fun migra6Para7PreservandoAConversaEComModoNulo() {
+        helper.createDatabase(TEST_DB, 6).apply {
+            execSQL(
+                "INSERT INTO chat_messages (id, sessionId, role, content, timestamp, " +
+                    "inferenceSource, latencyMs) VALUES " +
+                    "('m1', 's1', 'ASSISTANT', 'A capital é Brasília.', 1700000000000, " +
+                    "'LOCAL', 24000)"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 7, true, AppMigrations.MIGRATION_6_7)
+
+        db.query(
+            "SELECT content, inferenceSource, latencyMs FROM chat_messages"
+        ).use { c ->
+            assertTrue("a conversa do aluno sumiu na migração", c.moveToFirst())
+            assertEquals(1, c.count)
+            assertEquals("A capital é Brasília.", c.getString(0))
+            assertEquals("LOCAL", c.getString(1))
+            assertEquals(24000L, c.getLong(2))
+        }
+
+        db.query("SELECT responseMode FROM chat_messages").use { c ->
+            assertTrue(c.moveToFirst())
+            assertTrue(
+                "responseMode tem que ser NULO numa linha anterior ao Bloco D parte 1 — " +
+                    "um default afirmaria uma decisão que não houve",
+                c.isNull(0)
+            )
+        }
+    }
+
     private companion object {
         const val TEST_DB = "migration-test.db"
     }

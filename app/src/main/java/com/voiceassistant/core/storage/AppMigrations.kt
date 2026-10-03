@@ -29,7 +29,7 @@ object AppMigrations {
                     "`questionText` TEXT NOT NULL, `complexityPreFilter` TEXT NOT NULL, " +
                     "`routeDecision` TEXT NOT NULL, `confidenceScore` REAL NOT NULL, " +
                     "`confidenceMethod` TEXT NOT NULL, `finalTier` TEXT NOT NULL, " +
-                    "`pedagogicalMode` TEXT NOT NULL, `latencyMs` INTEGER NOT NULL, " +
+                    "`responseMode` TEXT NOT NULL, `latencyMs` INTEGER NOT NULL, " +
                     "`modelId` TEXT NOT NULL, `connectivity` TEXT NOT NULL)"
             )
         }
@@ -188,7 +188,30 @@ object AppMigrations {
         }
     }
 
+    /**
+     * v6 → v7: o eixo VERTICAL da elasticidade na `chat_messages` (Bloco D parte 1).
+     *
+     * ALTER TABLE de novo, e aqui o motivo é outro: a `chat_messages` guarda a conversa do
+     * aluno. Recriar a tabela apagaria o histórico de quem estivesse usando o aplicativo
+     * — não é dado de pesquisa, mas é dado de alguém.
+     *
+     * A coluna é **nullable sem default**, e não -1 como as numéricas da 5→6: `null` aqui
+     * significa "esta mensagem não tem faixa", que é o estado verdadeiro de toda linha
+     * anterior a esta versão e também o de qualquer resposta que venha de um tier sem
+     * logprobs. Um default de 'DIRETO' afirmaria retroativamente que todas as respostas
+     * antigas foram entregues sem ressalva — o que é literalmente verdade na tela de
+     * então, mas afirmaria também que **houve uma decisão** de não ressalvar, e não houve.
+     */
+    val MIGRATION_6_7 = object : Migration(6, 7) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `chat_messages` ADD COLUMN `responseMode` TEXT")
+        }
+    }
+
     /** Todas as migrações, na ordem — passe para o `Room.databaseBuilder`. */
     val ALL: Array<Migration> =
-        arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+        arrayOf(
+            MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
+            MIGRATION_6_7
+        )
 }

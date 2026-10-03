@@ -70,7 +70,23 @@ data class InferenceRequest(
      * resposta com gabarito depois exigiria reidentificar a questão pelo texto — que é
      * frágil e se perde quando a amostra muda.
      */
-    val expectedAnswer: String? = null
+    val expectedAnswer: String? = null,
+
+    /**
+     * Pede que o roteador derive o [ResponseMode] desta resposta — o eixo vertical da
+     * elasticidade, que a interface do Bloco D parte 1 exibe.
+     *
+     * **Default false, e isso é deliberado.** Quem liga é o caminho de **chat**; a bateria
+     * de medição não liga, e por isso não paga a aritmética extra nem muda uma linha do
+     * `routing_log`. O eixo experimental do Bloco A (qual `RoutingPolicy` decide o
+     * roteamento) fica intacto: derivar o modo pedagógico **não** é rotear, é descrever a
+     * resposta que já saiu.
+     *
+     * Um flag explícito, e não a reutilização de [rawPrompt] ou de [blockId] como
+     * sinalizador de "é a bateria": aqueles dois significam outra coisa, e sobrecarregá-los
+     * esconderia esta decisão atrás de um efeito colateral.
+     */
+    val deriveResponseMode: Boolean = false
 )
 
 enum class PromptComplexity {

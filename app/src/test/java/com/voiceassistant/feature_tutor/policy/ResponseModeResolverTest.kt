@@ -1,6 +1,6 @@
 package com.voiceassistant.feature_tutor.policy
 
-import com.voiceassistant.core.model.PedagogicalMode
+import com.voiceassistant.core.model.ResponseMode
 import com.voiceassistant.feature_tutor.policy.InferenceRouter.Companion.PRESCORE_UNAVAILABLE
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -20,9 +20,9 @@ import org.junit.Test
  * Os cortes usados aqui são os da `cascata-v1` real (quantil 0,1 ≈ 0,285 e quantil 0,5
  * ≈ 0,634) para que as fronteiras testadas sejam as que vão ao aparelho.
  */
-class PedagogicalModeResolverTest {
+class ResponseModeResolverTest {
 
-    private val resolver = PedagogicalModeResolver()
+    private val resolver = ResponseModeResolver()
 
     private fun modo(score: Float, modelo: PolicyModel? = cascataFake()) =
         resolver.resolve(score, modelo)
@@ -31,20 +31,20 @@ class PedagogicalModeResolverTest {
 
     @Test
     fun `score alto responde direto`() {
-        assertEquals(PedagogicalMode.DIRETO, modo(0.90f))
-        assertEquals(PedagogicalMode.DIRETO, modo(1.0f))
+        assertEquals(ResponseMode.DIRETO, modo(0.90f))
+        assertEquals(ResponseMode.DIRETO, modo(1.0f))
     }
 
     @Test
     fun `score intermediario responde com ressalva`() {
-        assertEquals(PedagogicalMode.RESSALVA, modo(0.50f))
-        assertEquals(PedagogicalMode.RESSALVA, modo(0.40f))
+        assertEquals(ResponseMode.RESSALVA, modo(0.50f))
+        assertEquals(ResponseMode.RESSALVA, modo(0.40f))
     }
 
     @Test
     fun `score baixo media ao professor`() {
-        assertEquals(PedagogicalMode.MEDIAR, modo(0.10f))
-        assertEquals(PedagogicalMode.MEDIAR, modo(0.0f))
+        assertEquals(ResponseMode.MEDIAR, modo(0.10f))
+        assertEquals(ResponseMode.MEDIAR, modo(0.0f))
     }
 
     @Test
@@ -54,8 +54,8 @@ class PedagogicalModeResolverTest {
         // ressalva, porque ensina o aluno a desconfiar do sinal.
         val baixo = modo(0.05f)
         val alto = modo(0.95f)
-        assertEquals(PedagogicalMode.MEDIAR, baixo)
-        assertEquals(PedagogicalMode.DIRETO, alto)
+        assertEquals(ResponseMode.MEDIAR, baixo)
+        assertEquals(ResponseMode.DIRETO, alto)
         assertTrue("MEDIAR tem que falar e DIRETO tem que calar",
             baixo!!.temMensagem && !alto!!.temMensagem)
     }
@@ -66,14 +66,14 @@ class PedagogicalModeResolverTest {
     fun `a fronteira do direto e inclusiva no corte`() {
         // Exatamente no corte é DIRETO: `>=`. Um `>` aqui mandaria a mediana do treino
         // para a ressalva e deslocaria a fração de todas as faixas.
-        assertEquals(PedagogicalMode.DIRETO, modo(CORTE_DIRETO))
-        assertEquals(PedagogicalMode.RESSALVA, modo(CORTE_DIRETO - 0.0001f))
+        assertEquals(ResponseMode.DIRETO, modo(CORTE_DIRETO))
+        assertEquals(ResponseMode.RESSALVA, modo(CORTE_DIRETO - 0.0001f))
     }
 
     @Test
     fun `a fronteira da mediacao e inclusiva na ressalva`() {
-        assertEquals(PedagogicalMode.RESSALVA, modo(CORTE_MEDIAR))
-        assertEquals(PedagogicalMode.MEDIAR, modo(CORTE_MEDIAR - 0.0001f))
+        assertEquals(ResponseMode.RESSALVA, modo(CORTE_MEDIAR))
+        assertEquals(ResponseMode.MEDIAR, modo(CORTE_MEDIAR - 0.0001f))
     }
 
     // ── Ausência de sinal não é um modo ───────────────────────────────────────
@@ -132,9 +132,9 @@ class PedagogicalModeResolverTest {
         // pergunta muda de faixa — e é isso que mantém a demonstração honesta se a
         // política for reajustada.
         val outro = cascataFake(quantis = mapOf("0.1" to 0.70, "0.5" to 0.90))
-        assertEquals(PedagogicalMode.MEDIAR, modo(0.60f, modelo = outro))
-        assertEquals(PedagogicalMode.RESSALVA, modo(0.80f, modelo = outro))
-        assertEquals(PedagogicalMode.DIRETO, modo(0.95f, modelo = outro))
+        assertEquals(ResponseMode.MEDIAR, modo(0.60f, modelo = outro))
+        assertEquals(ResponseMode.RESSALVA, modo(0.80f, modelo = outro))
+        assertEquals(ResponseMode.DIRETO, modo(0.95f, modelo = outro))
     }
 
     private fun cascataFake(

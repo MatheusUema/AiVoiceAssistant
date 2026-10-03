@@ -4,6 +4,19 @@ package com.voiceassistant.core.model
  * **Como** o sistema responde, dentro do que a infraestrutura alcança — o eixo
  * **vertical** da elasticidade pedagógica.
  *
+ * ## Cuidado com o nome: `pedagogicalMode` já existe e é OUTRA coisa
+ *
+ * Este enum chama-se `ResponseMode`, e não `PedagogicalMode`, para **não** colidir com a
+ * coluna `pedagogicalMode` da `routing_log`
+ * ([com.voiceassistant.core.logging.RoutingLogEntry]), que existe desde a v2 do banco e
+ * guarda o [TutorMode] — `EXPLAIN`, `HINT`, `SUMMARY`, `REVIEW`, isto é, o **estilo**
+ * pedido pelo aluno, não a forma de entrega decidida pelo sistema.
+ *
+ * Duas colunas homônimas com sentidos diferentes, uma delas já exportada no CSV da
+ * pesquisa, produziriam um erro de análise silencioso — do tipo que não estoura, não loga e
+ * só aparece quando alguém cruza as duas tabelas. A coluna antiga **não** foi renomeada
+ * justamente porque é dado de pesquisa já coletado; quem renomeou foi o lado novo.
+ *
  * ## Dois eixos, e eles são ortogonais
  *
  * Não confundir com [InferenceSource], que é o eixo **horizontal**:
@@ -26,7 +39,7 @@ package com.voiceassistant.core.model
  * escolhido —, que no Qwen2.5-1.5B está **invertida**: AUC 0,420, IC [0,360; 0,480],
  * inteiramente abaixo do acaso. Com ela a ressalva subiria preferencialmente nas questões
  * que o modelo **acertou**, o que é pior que não ter ressalva, porque ensina o aluno a
- * desconfiar do sinal. Ver [com.voiceassistant.feature_tutor.policy.PedagogicalModeResolver].
+ * desconfiar do sinal. Ver [com.voiceassistant.feature_tutor.policy.ResponseModeResolver].
  *
  * ## Dois níveis de aviso, e por que o geral não mora aqui
  *
@@ -43,7 +56,7 @@ package com.voiceassistant.core.model
  *
  * @property mensagem o que a tela diz ao aluno, ou null quando o modo não fala.
  */
-enum class PedagogicalMode(val mensagem: String?) {
+enum class ResponseMode(val mensagem: String?) {
 
     /**
      * Resposta entregue sem ressalva. **Não** é um selo de acerto — é a ausência de
