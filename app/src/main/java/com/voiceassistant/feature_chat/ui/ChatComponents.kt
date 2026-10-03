@@ -1,5 +1,6 @@
 package com.voiceassistant.feature_chat.ui
 
+import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -16,12 +17,14 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -40,6 +43,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.RateReview
+import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Summarize
 import androidx.compose.material.icons.filled.VolumeUp
@@ -55,16 +59,22 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.PreviewParameter
 import androidx.compose.ui.tooling.preview.PreviewParameterProvider
@@ -72,6 +82,7 @@ import androidx.compose.ui.unit.dp
 import com.voiceassistant.core.model.ChatMessage
 import com.voiceassistant.core.model.InferenceSource
 import com.voiceassistant.core.model.MessageRole
+import com.voiceassistant.core.model.ResponseMode
 import com.voiceassistant.core.model.TutorMode
 import com.voiceassistant.feature_chat.viewmodel.ListeningState
 import com.voiceassistant.ui.theme.VoiceAssistantTheme
@@ -86,6 +97,11 @@ fun ChatMessageBubble(
     modifier: Modifier = Modifier
 ) {
     val isUser = message.role == MessageRole.USER
+    // Mediação recolhe a resposta: o sistema deixa de responder DIRETAMENTE, que é o que a
+    // §11 define, mas não destrói uma inferência já paga. Sem isto, a frase "não consigo
+    // responder a esta pergunta" apareceria acima da resposta à vista, e seria falsa.
+    val mediado = message.responseMode == ResponseMode.MEDIAR
+    var revelada by remember(message.id) { mutableStateOf(false) }
 
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -95,31 +111,196 @@ fun ChatMessageBubble(
             modifier = Modifier.widthIn(max = 300.dp),
             horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
         ) {
-            Surface(
-                shape = bubbleShape(isUser),
-                color = if (isUser)
-                    MaterialTheme.colorScheme.primaryContainer
-                else
-                    MaterialTheme.colorScheme.secondaryContainer,
-                shadowElevation = 1.dp
-            ) {
-                Text(
-                    text = message.content,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (isUser)
-                        MaterialTheme.colorScheme.onPrimaryContainer
-                    else
-                        MaterialTheme.colorScheme.onSecondaryContainer,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                )
+            message.responseMode?.let { modo ->
+                ResponseModeBanner(mode = modo)
+                if (modo.temMensagem) Spacer(modifier = Modifier.height(6.dp))
             }
 
-            if (!isUser && message.inferenceSource != null) {
+            if (mediado && !revelada) {
+                TextButton(onClick = { revelada = true }) {
+                    Text(
+                        "Ver a resposta mesmo assim",
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+            } else {
+                Surface(
+                    shape = bubbleShape(isUser),
+                    color = if (isUser)
+                        MaterialTheme.colorScheme.primaryContainer
+                    else
+                        MaterialTheme.colorScheme.secondaryContainer,
+                    shadowElevation = 1.dp
+                ) {
+                    Text(
+                        text = message.content,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (isUser)
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        else
+                            MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                    )
+                }
+            }
+
+            if (!isUser) {
                 Spacer(modifier = Modifier.height(4.dp))
-                InferenceSourceBadge(source = message.inferenceSource)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // Eixo HORIZONTAL (quem respondeu) e eixo VERTICAL (como) lado a
+                    // lado, de propósito: é o que torna os dois eixos legíveis na figura.
+                    message.inferenceSource?.let { InferenceSourceBadge(source = it) }
+                    message.responseMode?.let { ResponseModeBadge(mode = it) }
+                    LevarAoProfessorButton(message = message)
+                }
             }
         }
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Eixo vertical — os três modos de resposta (Bloco D parte 1)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * O balão de uma resposta do assistente, com o eixo vertical aplicado.
+ *
+ * Substitui o [ChatMessageBubble] para mensagens do assistente que tenham
+ * [ChatMessage.responseMode]. Três comportamentos:
+ *
+ *  - [ResponseMode.DIRETO] — nada de especial. O modo direto é a **ausência** de ressalva,
+ *    e é por isso que não há faixa nem selo afirmativo: um "resposta confiável" prometeria
+ *    o que uma AUC de 0,735 não sustenta.
+ *  - [ResponseMode.RESSALVA] — faixa de advertência acima, resposta visível.
+ *  - [ResponseMode.MEDIAR] — faixa acima e resposta **recolhida**. Sem recolher, a frase
+ *    "não consigo responder a esta pergunta" conviveria com a resposta à vista, e seria
+ *    falsa. Recolher, e não apagar, porque a inferência já foi paga e o aluno pode querer
+ *    vê-la — o que o sistema deixa de fazer é entregá-la **diretamente** (§11).
+ */
+@Composable
+fun ResponseModeBanner(
+    mode: ResponseMode,
+    modifier: Modifier = Modifier
+) {
+    val mensagem = mode.mensagem ?: return
+    val (container, content, icone) = when (mode) {
+        ResponseMode.MEDIAR -> Triple(
+            MaterialTheme.colorScheme.errorContainer,
+            MaterialTheme.colorScheme.onErrorContainer,
+            Icons.Default.School
+        )
+        else -> Triple(
+            MaterialTheme.colorScheme.tertiaryContainer,
+            MaterialTheme.colorScheme.onTertiaryContainer,
+            Icons.Default.Warning
+        )
+    }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(container, RoundedCornerShape(12.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Icon(icone, null, tint = content, modifier = Modifier.size(16.dp))
+        Text(
+            text = mensagem,
+            style = MaterialTheme.typography.bodySmall,
+            color = content
+        )
+    }
+}
+
+/**
+ * Selo do modo, ao lado do selo de origem. Não existe para [ResponseMode.DIRETO] — ver a
+ * nota sobre os dois níveis de aviso no KDoc de [ResponseMode].
+ */
+@Composable
+fun ResponseModeBadge(
+    mode: ResponseMode,
+    modifier: Modifier = Modifier
+) {
+    if (mode == ResponseMode.DIRETO) return
+
+    val style = when (mode) {
+        ResponseMode.RESSALVA -> BadgeStyle("COM RESSALVA", Icons.Default.Warning,
+            MaterialTheme.colorScheme.tertiaryContainer,
+            MaterialTheme.colorScheme.onTertiaryContainer)
+        else -> BadgeStyle("MEDIADO", Icons.Default.School,
+            MaterialTheme.colorScheme.errorContainer,
+            MaterialTheme.colorScheme.onErrorContainer)
+    }
+
+    Row(
+        modifier = modifier
+            .background(style.container, RoundedCornerShape(50))
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Icon(style.icon, null, tint = style.content, modifier = Modifier.size(10.dp))
+        Text(style.label, style = MaterialTheme.typography.labelSmall, color = style.content)
+    }
+}
+
+/**
+ * O caminho ao professor, **sempre** disponível em toda resposta do assistente — não só no
+ * modo mediado. A §16 exige que o caminho de encaminhamento esteja visível a quem usa, e
+ * um caminho que só aparece quando o sistema desiste ensinaria o aluno a procurar o
+ * professor apenas no pior caso.
+ *
+ * Dispara um `ACTION_SEND` com a pergunta e a resposta. A folha de escolha do aplicativo é
+ * UI do Android, não deste app — relevante para a legenda de quem for fotografar.
+ */
+@Composable
+fun LevarAoProfessorButton(
+    message: ChatMessage,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    TextButton(
+        onClick = {
+            val envio = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, "Dúvida do Tutor IA")
+                putExtra(Intent.EXTRA_TEXT, message.content)
+            }
+            context.startActivity(Intent.createChooser(envio, "Levar ao professor"))
+        },
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+        modifier = modifier.height(24.dp)
+    ) {
+        Icon(Icons.Default.School, null, modifier = Modifier.size(12.dp))
+        Spacer(modifier = Modifier.width(4.dp))
+        Text("Levar ao professor", style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+/**
+ * O aviso **geral** sobre resposta de IA — uma vez na tela, nunca por mensagem.
+ *
+ * A razão de ele ser separado da ressalva está no KDoc de [ResponseMode], e é o que
+ * sustenta este componente existir à parte: aviso que aparece sempre não carrega
+ * informação. Ele habitua, deixa de ser lido e **competiria** com a ressalva — se toda
+ * resposta trouxesse "confira sempre", o aluno não distinguiria *esta aqui pode estar
+ * errada* do texto permanente.
+ */
+@Composable
+fun AvisoGeralIa(modifier: Modifier = Modifier) {
+    Text(
+        text = ResponseMode.AVISO_GERAL,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+    )
 }
 
 private fun bubbleShape(isUser: Boolean) = RoundedCornerShape(

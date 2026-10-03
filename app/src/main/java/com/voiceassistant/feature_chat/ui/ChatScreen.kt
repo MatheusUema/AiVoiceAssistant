@@ -37,6 +37,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.voiceassistant.core.model.ChatMessage
 import com.voiceassistant.core.model.InferenceSource
 import com.voiceassistant.core.model.MessageRole
+import com.voiceassistant.core.model.ResponseMode
 import com.voiceassistant.core.model.TutorMode
 import com.voiceassistant.feature_chat.viewmodel.ChatUiState
 import com.voiceassistant.feature_chat.viewmodel.ChatViewModel
@@ -140,6 +141,10 @@ internal fun ChatContent(
                     onSendClick = onSendClick,
                     onMicClick = onMicClick
                 )
+                // O aviso GERAL sobre resposta de IA mora aqui, uma vez, e nunca no balão:
+                // um aviso que aparece sempre não carrega informação e competiria com a
+                // ressalva por mensagem. Ver o KDoc de ResponseMode.
+                AvisoGeralIa()
             }
         }
     ) { paddingValues ->
@@ -227,6 +232,91 @@ private fun ChatHintModePreview() {
                 selectedTutorMode = TutorMode.HINT,
                 partialTranscript = "Como ocorre a respiração celular…",
                 inputText = "Como ocorre a respiração celular…"
+            ),
+            onInputChanged = {}, onSendClick = {}, onMicClick = {},
+            onNewSession = {}, onDismissError = {}, onStopSpeaking = {},
+            onTutorModeSelected = {}
+        )
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Bloco D parte 1 — os três modos no cenário Unplugged
+//
+// ATENÇÃO A QUEM FOTOGRAFAR: estes três previews são ESTADO FORÇADO. Eles
+// demonstram a INTERFACE, não o comportamento do roteador — a faixa vem de um
+// `responseMode` escrito à mão aqui, não de um score de cascata. A §16 exige
+// que a legenda de cada imagem diga isso. Um print de estado forçado
+// apresentado como comportamento do sistema seria exatamente o tipo de
+// medição que engana de que a §15 fala.
+//
+// O cenário é o Unplugged: `isOffline = true` e `privacyModeEnabled = true`,
+// isto é, sem internet e sem servidor — só o aparelho. É nele que o eixo
+// vertical é a única elasticidade disponível.
+// ───────────────────────────────────────────────────────────────────────────
+
+private const val PERGUNTA_D1 = "Por que o céu é azul?"
+
+private fun mensagensD1(modo: ResponseMode, resposta: String) = listOf(
+    ChatMessage(sessionId = "d1", role = MessageRole.USER, content = PERGUNTA_D1),
+    ChatMessage(
+        sessionId = "d1", role = MessageRole.ASSISTANT,
+        content = resposta,
+        inferenceSource = InferenceSource.LOCAL,
+        latencyMs = 24_000,
+        responseMode = modo
+    )
+)
+
+private fun uiStateUnplugged(modo: ResponseMode, resposta: String) = ChatUiState(
+    sessionId = "d1",
+    messages = mensagensD1(modo, resposta),
+    isOffline = true,
+    privacyModeEnabled = true
+)
+
+@Preview(showBackground = true, name = "D1 — 1. Responder direto", showSystemUi = true)
+@Composable
+private fun ChatModoDiretoPreview() {
+    VoiceAssistantTheme {
+        ChatContent(
+            uiState = uiStateUnplugged(
+                ResponseMode.DIRETO,
+                "A luz do Sol se espalha ao atravessar a atmosfera, e o azul se " +
+                    "espalha mais que as outras cores porque tem onda mais curta."
+            ),
+            onInputChanged = {}, onSendClick = {}, onMicClick = {},
+            onNewSession = {}, onDismissError = {}, onStopSpeaking = {},
+            onTutorModeSelected = {}
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "D1 — 2. Responder com ressalva", showSystemUi = true)
+@Composable
+private fun ChatModoRessalvaPreview() {
+    VoiceAssistantTheme {
+        ChatContent(
+            uiState = uiStateUnplugged(
+                ResponseMode.RESSALVA,
+                "O azul aparece porque a atmosfera espalha a luz, e creio que as " +
+                    "cores de onda mais curta se espalham mais."
+            ),
+            onInputChanged = {}, onSendClick = {}, onMicClick = {},
+            onNewSession = {}, onDismissError = {}, onStopSpeaking = {},
+            onTutorModeSelected = {}
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "D1 — 3. Mediar ao professor", showSystemUi = true)
+@Composable
+private fun ChatModoMediarPreview() {
+    VoiceAssistantTheme {
+        ChatContent(
+            uiState = uiStateUnplugged(
+                ResponseMode.MEDIAR,
+                "O céu é azul por causa do reflexo da água dos oceanos na atmosfera."
             ),
             onInputChanged = {}, onSendClick = {}, onMicClick = {},
             onNewSession = {}, onDismissError = {}, onStopSpeaking = {},
