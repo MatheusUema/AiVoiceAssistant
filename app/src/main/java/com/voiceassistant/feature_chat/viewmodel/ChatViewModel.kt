@@ -262,7 +262,18 @@ class ChatViewModel @Inject constructor(
     fun startNewSession() {
         stopListening()
         stopSpeaking()
-        _uiState.update { ChatUiState(sessionId = UUID.randomUUID().toString()) }
+        // Preserva o que descreve o AMBIENTE, não a conversa. Trocar o estado inteiro por
+        // `ChatUiState()` zerava `privacyModeEnabled` e `isOffline`, e as pílulas da
+        // ModeStatusBar sumiam ao abrir conversa nova — `observeSettings` só reemite
+        // quando o valor MUDA, então elas só voltariam se alguém mexesse nas settings.
+        // O aluno via o indicador de privacidade desaparecer sem ter desligado nada.
+        _uiState.update { atual ->
+            ChatUiState(
+                sessionId = UUID.randomUUID().toString(),
+                privacyModeEnabled = atual.privacyModeEnabled,
+                isOffline = atual.isOffline
+            )
+        }
         observeChatHistory()
     }
 

@@ -89,6 +89,42 @@ de estado forçado e dizer isso na legenda.
 
 ---
 
+## Captura realizada — 03/10/2026
+
+**Aparelho: Device 1.** `ro.product.model` = `23088PND5R`, `ro.product.marketname` =
+**Xiaomi 13T Pro**, plataforma `mt6985`, 11.616 MB de RAM, Android 15 (HyperOS 2).
+Dois identificadores independentes (código de modelo e SoC) casam com o Device 1 da
+tabela canônica, então os prints estão **dentro** do conjunto caracterizado.
+
+> *Nota de nomenclatura:* `analise-quatro-aparelhos.md` escreve "Redmi (23088PND5R)",
+> mas o aparelho se identifica como **Xiaomi 13T Pro**. Mesmo aparelho, nome comercial
+> errado naquele arquivo.
+
+Modelo local `qwen2.5-1.5b-instruct-q4_k_m` (1,1 GB), carregado em 2.613 ms, backend CPU,
+4 threads, ctx 2048. Cenário Unplugged por modo privacidade (ver `CenarioUnpluggedSetup`),
+desligado ao final. **Cortes em vigor em todas as tentativas: 0,2852 / 0,6341.**
+
+| # | área | pergunta | score | modo | tempo | tokens |
+|---|---|---|---|---|---|---|
+| 1 | MT | cone invertido, volume a 2 m de altura | **0,1796** | **MEDIAR** | 11.549 ms | 201→146 |
+| 2 | CH | Revolução Francesa e suas causas | **0,5826** | **RESSALVA** | 5.686 ms | 153→49 |
+| 3 | CN | o que é fotossíntese | **0,6015** | RESSALVA | 6.734 ms | 151→86 |
+| 4 | MT | quanto é 15% de 200 | **0,9890** | **DIRETO** | 4.891 ms | 147→17 |
+
+Prints em `prints-d1/aparelho/`: `dev1-mt1-mediar.png`, `dev1-ch1-ressalva.png`,
+`dev1-cn1-ressalva.png`, `dev1-mt2-direto.png`. **Os quatro são de questão real** — a faixa
+veio do score da cascata, não de estado forçado.
+
+**Os três modos saíram em quatro perguntas**, e a mediação na primeira. Duas leituras que
+valem para a legenda:
+
+- A aposta em matemática funcionou (0,1796 está bem dentro do decil 10), **mas** a quarta
+  tentativa também é de matemática e deu 0,9890 — o maior score do conjunto. O sinal **não
+  é "matemática = ruim"**; ele responde à pergunta, não à área. Uma legenda que dissesse
+  "MT cai em mediação" estaria generalizando de um caso.
+- A pergunta que mediou é a única com raciocínio de múltiplos passos (semelhança de
+  triângulos **mais** volume de cone). A que foi direto resolve-se numa conta.
+
 ## O que registrar na §16 quando terminar
 
 A seção pede três coisas nominalmente:
