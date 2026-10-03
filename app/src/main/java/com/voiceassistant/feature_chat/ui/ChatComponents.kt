@@ -154,8 +154,11 @@ fun ChatMessageBubble(
                     // lado, de propósito: é o que torna os dois eixos legíveis na figura.
                     message.inferenceSource?.let { InferenceSourceBadge(source = it) }
                     message.responseMode?.let { ResponseModeBadge(mode = it) }
-                    LevarAoProfessorButton(message = message)
                 }
+                // Em linha própria, e não ao lado dos selos: com os dois selos presentes a
+                // linha estoura o `widthIn(max = 300.dp)` da coluna e o rótulo é cortado no
+                // meio — o print do modo com ressalva mostrou exatamente isso.
+                LevarAoProfessorButton(message = message)
             }
         }
     }
@@ -273,11 +276,17 @@ fun LevarAoProfessorButton(
             context.startActivity(Intent.createChooser(envio, "Levar ao professor"))
         },
         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-        modifier = modifier.height(24.dp)
+        modifier = modifier
     ) {
-        Icon(Icons.Default.School, null, modifier = Modifier.size(12.dp))
+        Icon(Icons.Default.School, null, modifier = Modifier.size(14.dp))
         Spacer(modifier = Modifier.width(4.dp))
-        Text("Levar ao professor", style = MaterialTheme.typography.labelSmall)
+        // maxLines = 1: o rótulo é curto, mas sem isto ele quebra e some sob a altura do
+        // botão quando a coluna está apertada.
+        Text(
+            "Levar ao professor",
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1
+        )
     }
 }
 

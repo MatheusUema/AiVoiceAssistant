@@ -29,7 +29,7 @@ object AppMigrations {
                     "`questionText` TEXT NOT NULL, `complexityPreFilter` TEXT NOT NULL, " +
                     "`routeDecision` TEXT NOT NULL, `confidenceScore` REAL NOT NULL, " +
                     "`confidenceMethod` TEXT NOT NULL, `finalTier` TEXT NOT NULL, " +
-                    "`responseMode` TEXT NOT NULL, `latencyMs` INTEGER NOT NULL, " +
+                    "`pedagogicalMode` TEXT NOT NULL, `latencyMs` INTEGER NOT NULL, " +
                     "`modelId` TEXT NOT NULL, `connectivity` TEXT NOT NULL)"
             )
         }
