@@ -115,15 +115,57 @@ Prints em `prints-d1/aparelho/`: `dev1-mt1-mediar.png`, `dev1-ch1-ressalva.png`,
 `dev1-cn1-ressalva.png`, `dev1-mt2-direto.png`. **Os quatro são de questão real** — a faixa
 veio do score da cascata, não de estado forçado.
 
-**Os três modos saíram em quatro perguntas**, e a mediação na primeira. Duas leituras que
-valem para a legenda:
+**Os três modos saíram em quatro perguntas**, e a mediação na primeira.
 
-- A aposta em matemática funcionou (0,1796 está bem dentro do decil 10), **mas** a quarta
-  tentativa também é de matemática e deu 0,9890 — o maior score do conjunto. O sinal **não
-  é "matemática = ruim"**; ele responde à pergunta, não à área. Uma legenda que dissesse
-  "MT cai em mediação" estaria generalizando de um caso.
-- A pergunta que mediou é a única com raciocínio de múltiplos passos (semelhança de
-  triângulos **mais** volume de cone). A que foi direto resolve-se numa conta.
+### Advertência de legenda: as duas MT ficaram nos dois extremos
+
+A busca começou por matemática porque é onde a pesquisa mede o pior desempenho, e
+funcionou — 0,1796 está bem dentro do decil 10. **Mas a quarta tentativa também é de
+matemática e deu 0,9890, o maior score do conjunto.** Os dois extremos vieram da mesma
+área.
+
+Portanto: **o sinal responde à pergunta, não à área.** Uma legenda que dissesse
+"matemática cai em mediação" estaria generalizando de um caso — e seria uma afirmação mais
+forte do que qualquer coisa medida aqui, porque quatro perguntas não estabelecem padrão
+nenhum.
+
+O que distingue as duas não é o rótulo de área: a que mediou é a única com **raciocínio de
+múltiplos passos** (semelhança de triângulos *mais* volume de cone); a que foi direto
+resolve-se numa conta.
+
+**Isto vale para além do print.** O documento trata MT como ponto cego do roteamento, e
+está certo — mas aquilo é **propriedade agregada**, medida sobre centenas de questões, e
+não regra por item. Um sistema que escalasse "toda questão de MT" agiria sobre a média e
+erraria nos dois sentidos: mandaria à nuvem perguntas como "15% de 200", que o modelo local
+acerta sem hesitar, e não é por ser de matemática que uma pergunta é difícil. O par
+0,1796 / 0,9890 é o lembrete mais curto disso que a coleta produziu.
+
+### Nota metodológica: fotografar achou o que a suíte não pegava
+
+Dois defeitos foram encontrados **pela captura**, não pelos testes — e nenhum dos dois era
+do Bloco D parte 1 em si:
+
+- **"Levar ao professor" cortado ao meio.** Com os dois selos presentes, a linha estourava
+  o `widthIn(max = 300.dp)` da coluna e o rótulo quebrava sob a altura do botão. Nenhum
+  teste mede largura de texto renderizado; só se vê olhando.
+- **As pílulas de privacidade e offline sumiam ao abrir conversa nova.**
+  `ChatViewModel.startNewSession` substituía o estado inteiro por `ChatUiState()` padrão,
+  zerando `privacyModeEnabled` e `isOffline`; como `observeSettings` só reemite quando o
+  valor **muda**, elas não voltavam. É **pré-existente**, não do D1.
+
+O segundo é o mais instrutivo, e é por isso que está aqui. Ele **só aparece na interseção
+de duas condições** — privacidade ligada **e** alguém tocando em "nova conversa" — e
+nenhum teste fazia as duas: os de migração não abrem a UI, os de política não têm estado de
+tela, e os `@Preview` constroem o estado à mão, já com as flags no valor certo, de modo que
+nunca passam por `startNewSession`. A suíte estava verde e continuaria verde.
+
+Quem o encontrou foi o roteiro de captura, porque ele toca em "nova conversa" antes de cada
+pergunta para que o print saia limpo — exatamente o gesto que nenhum teste fazia. E o efeito
+não é cosmético para quem usa: **o aluno veria o indicador de privacidade desaparecer sem
+ter desligado nada**, o que é a interface mentindo sobre o estado do sistema.
+
+Fica como argumento a favor do próprio Bloco D parte 1: expressar a política na tela não é
+só produzir figura: é um **modo de verificação** que a bateria de medição não substitui.
 
 ## O que registrar na §16 quando terminar
 
